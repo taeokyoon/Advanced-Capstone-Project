@@ -1,8 +1,8 @@
 # Advanced-Capstone-Project
 
 # 최초설정 (커밋에 수정자 찍히기 위함)
-1. 이름/이메일
-2. 기본 브랜치 쓰기
+- 이름/이메일
+- 기본 브랜치 쓰기
 
 git config --global user.name "이름"
 git config --global user.email "이메일"
@@ -13,81 +13,58 @@ git config --global init.defaultBranch main
 git clone 원격저장소url
 
 # 작업 전/후 상태 확인
-1. 변경사항 요약
+- 변경사항 요약
 
 git status
 
-2. 커밋 로그 보기
+- 커밋 로그 보기
 
 git log --oneline --graph --decorate --all
 
-3. 원격(origin) 확인
+- 원격(origin) 확인
+
 git remote -v
 
-# 변경사항 저장(커밋) 흐름
-1. 변경 내용 확인
+# 작업 간 규칙
 
-git diff
+본인이 담당한 파일만 건드릴 것. 만약 기능 구현 간 부득이하게 다른 팀원 파일을 건드려야할 땐,
+꼭 작업 중인지 물어보고 수정할 것 (동시작업 시 병합 후 오류발생함. 복구하는 작업이 매우 피곤)
 
-2. staging 작업
+# 작업 간 알아야할 것
 
-git add . // 수정파일 전부 올리기
+항상 작업에 들어가기 전 로컬저장소 최신화 필요
+우리는 main(최종배포용) 말고 develop 브랜치 생성 후 작업할거임 (main은 혹시나 해결못할 충돌 발생 시 백업하기 위한 브랜치)
 
-git add 파일명1, 파일명2 // 수정파일 선택 후 올리기 (이걸로 해야 안전함)
+만약, 내가 맡은 기능에 대해서 작업을 들어갈거다?
+그럼 팀원 누군가 develop에 기능을 추가해뒀을 수도 있으니 충돌예방을 위해 git pull 로 최신화 해준 뒤
+작업할 브랜치 만들어서 작업할 것
 
-3. 커밋(스냅샷)
+# 이슈화 작업
+각자 맡은 파트에 맡게 본인 작업 issue 를 생성 후 issue #number 에 맞는 브랜치까지 생성할 것
 
-git commit -m "메시지"
+ex)  [FEATURE] login 추가 issue를 생성하면 issue number가 부여됨 #31 이런식으로
 
-4. git push
+그리고 브랜치명은 각 이슈에 맞게 feature/31 이렇게 생성할 것
 
-5. git pull
+# develop 브랜치 최신버전을 다시 가져오고 싶을 때
 
-6. git fetch
+1. 현재 상태 확인
+git status
+2. 로컬 변경사항 (모두) 취소 [수정한 파일들 원래대로 되돌리는 과정]
+- git restore ~/example1.c  
+- git restore .
+→ restore 커맨드는 local에서만 변경사항을 취소하는 것 (github 영향 X)
+3. untracked 파일 삭제 (새로만든 파일들) [git이 추적 안하는 새파일/폴더 삭제]
+git clean -fd
+4. 최신 develop 가져오기
+git pull origin develop
+5. 다시 상태 확인
+git status
 
-# branch
-1. branch 리스트
+# 더 강력한 버전 (이미 commit을 해버린 상황일 때 강제복구)
 
-git branch
+1. git status
+2. git reset —hard origin/develop [로컬 commit도 전부 취소해버림]
+3. git clean -fd
+4. git pull origin develop
 
-2. branch 생성/이동
-
-git switch -c ~/branch명
-혹은
-git checkout -b ~/branch명
-
-3. branch 이동
-
-git switch branch명
-
-4. branch 병합
-
-git merge ~/branch명
-
-# 되돌리기/취소 (실수 방지용)
-1. add 취소 (staging에서 내리기)
-
-git restore --staged 파일명 (전체 파일이면 파일명 자리에 .)
-
-2. 작업파일 변경 되돌리기(로컬 수정사항 폐기)
-
-git restore 파일명
-
-3. 마지막 커밋 메시지 수정(푸시 전일때만 추천)
-
-git commit --amend
-
-# 팀플 운영에서 최소규칙 (충돌 줄이기 위함)
-1. 작업 시작 전
-
-git switch main -> git pull
-
-2. 기능 작업
-
-git switch -c ~
-
-3. 커밋 후
-
-git push -u origin ~
-
-4. github에서 PR로 main에 합치기 (main은 최종배포 branch로 우리는 작업간 develop branch로 PR할 것)
