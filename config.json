@@ -1,0 +1,5 @@
+{
+  "delta_turtle": 0.10,
+  "delta_ok": 0.05,
+  "save_interval_seconds": 60
+}
