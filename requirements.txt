@@ -1,6 +1,17 @@
-opencv-python
-mediapipe
-pystray
-Pillow
-winotify
-pyinstaller
+# ── 핵심 비전 및 AI 라이브러리 ──
+opencv-python>=4.8.0
+mediapipe>=0.10.0
+
+# ── [중요] Mac/Windows 공통: MediaPipe 버전 충돌 방지용 ──
+protobuf<4
+
+# ── 트레이 아이콘 (GUI) ──
+pystray>=0.93.0
+Pillow>=10.0.0
+
+# ── Firebase 클라우드 연동 ──
+firebase-admin>=6.5.0
+
+# ── OS별 알림 라이브러리 분기 처리 ──
+# Windows에서는 plyer를 설치합니다. (Mac은 파이썬이 알아서 무시함)
+plyer>=2.1.0; sys_platform == 'win32'
