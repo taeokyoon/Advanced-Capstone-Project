@@ -10,11 +10,15 @@ class PostureLogger:
     """
     초 단위 판정 결과를 누적하다가 flush() 호출 시
     한 줄의 JSON Lines 레코드로 posture_log.jsonl 에 append.
+
+    user_dir : 로그를 저장할 디렉터리
+               비로그인 → logs/anonymous/
+               로그인   → logs/{uid}/
     """
 
-    def __init__(self, log_path: str):
-        os.makedirs(os.path.dirname(log_path), exist_ok=True)
-        self.log_path     = log_path
+    def __init__(self, user_dir: str):
+        os.makedirs(user_dir, exist_ok=True)
+        self.log_path     = os.path.join(user_dir, "posture_log.jsonl")
         self.turtle_secs  = 0
         self.total_secs   = 0
 
@@ -26,8 +30,16 @@ class PostureLogger:
 
     def flush(self) -> bool:
         """누적 데이터를 파일에 기록하고 카운터 초기화. 성공 여부 반환."""
+        return self.flush_with_record() is not None
+
+    def flush_with_record(self) -> dict | None:
+        """
+        누적 데이터를 파일에 기록하고 카운터 초기화.
+        저장된 레코드 dict 반환, 데이터 없거나 실패 시 None.
+        업로드 큐 연동 시 반환값을 enqueue() 에 전달한다.
+        """
         if self.total_secs == 0:
-            return False
+            return None
 
         record = {
             "timestamp":      datetime.now().isoformat(timespec="seconds"),
@@ -40,7 +52,7 @@ class PostureLogger:
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
             self.turtle_secs = 0
             self.total_secs  = 0
-            return True
+            return record
         except Exception as e:
             print(f"[log error] {e}")
-            return False
+            return None

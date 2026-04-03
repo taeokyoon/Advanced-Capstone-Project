@@ -1,15 +1,19 @@
 """
 tray_app.py — pystray 트레이 아이콘 관리
-(알림 로직은 src.utils.notifier로 위임)
+
+변경 사항 (2차):
+  • build_tray() 에 auth_manager 추가 → 메뉴 항목 visible 람다로 동적 전환
+  • 로그인/로그아웃/통계보기 콜백을 외부(turtle_neck.py)에서 주입
+  • 알림은 src.utils.notifier 위임 유지
 """
 from PIL import Image, ImageDraw
 import pystray
-# winotify 임포트를 삭제하고, 우리가 만든 공통 알림 함수를 가져옵니다.
 from src.utils.notifier import send_notify
 
 APP_ID = "거북목 감지기"
 
-# 아이콘 이미지 생성 로직 (기존과 동일)
+# ── 아이콘 이미지 ─────────────────────────────────────────────────────────────
+
 def _make_icon(color: str) -> Image.Image:
     img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
     ImageDraw.Draw(img).ellipse([4, 4, 60, 60], fill=color)
@@ -19,29 +23,60 @@ ICON_GRAY  = _make_icon("gray")
 ICON_GREEN = _make_icon("green")
 ICON_RED   = _make_icon("red")
 
+# ── 알림 ─────────────────────────────────────────────────────────────────────
+
 def notify(title: str, msg: str):
-    """
-    이제 직접 알림을 쏘지 않고, notifier 모듈에 부탁합니다.
-    여기서 호출하면 notifier.py 내부에서 OS를 체크해 알아서 실행됩니다.
-    """
     send_notify(title, msg)
 
-def build_tray(on_calibrate, on_quit) -> pystray.Icon:
-    """트레이 아이콘 객체 생성."""
+# ── 트레이 아이콘 빌드 ────────────────────────────────────────────────────────
+
+def build_tray(
+    on_calibrate,
+    on_login,
+    on_logout,
+    on_stats,
+    on_quit,
+    auth_manager,
+) -> pystray.Icon:
+    """
+    트레이 아이콘 객체 생성.
+
+    메뉴 항목 가시성은 auth_manager.is_logged_in() 으로 런타임에 결정:
+      비로그인: 캘리브레이션 | 로그인 | 종료
+      로그인:   캘리브레이션 | 통계 보기 | 로그아웃 | 종료
+    """
     return pystray.Icon(
-        "turtle_neck", # 첫 번째 인자는 name입니다.
+        "turtle_neck",
         icon=ICON_GRAY,
         title=f"{APP_ID} — 캘리브레이션 필요",
         menu=pystray.Menu(
             pystray.MenuItem("캘리브레이션", on_calibrate, default=True),
+            pystray.MenuItem(
+                "통계 보기",
+                on_stats,
+                visible=lambda item: auth_manager.is_logged_in(),
+            ),
+            pystray.MenuItem(
+                "로그인",
+                on_login,
+                visible=lambda item: not auth_manager.is_logged_in(),
+            ),
+            pystray.MenuItem(
+                "로그아웃",
+                on_logout,
+                visible=lambda item: auth_manager.is_logged_in(),
+            ),
             pystray.MenuItem("종료", on_quit),
         ),
     )
 
+# ── 트레이 상태 갱신 ──────────────────────────────────────────────────────────
+
 def set_tray_state(icon: pystray.Icon, baseline: float | None, is_turtle: bool):
-    """상태에 따른 아이콘 및 툴팁 업데이트 (기존과 동일)"""
-    if icon is None: return
-    
+    """상태에 따른 아이콘 및 툴팁 업데이트."""
+    if icon is None:
+        return
+
     if baseline is None:
         icon.icon  = ICON_GRAY
         icon.title = f"{APP_ID} — 캘리브레이션 필요"
