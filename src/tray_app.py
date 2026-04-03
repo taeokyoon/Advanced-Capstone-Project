@@ -33,11 +33,12 @@ def notify(title: str, msg: str):
 def build_tray(
     on_calibrate,
     on_login,
+    on_signup,
     on_logout,
     on_stats,
     on_quit,
     auth_manager,
-) -> pystray.Icon:
+) -> "pystray.Icon":  # type: ignore[reportInvalidTypeForm]
     """
     트레이 아이콘 객체 생성.
 
@@ -62,6 +63,11 @@ def build_tray(
                 visible=lambda item: not auth_manager.is_logged_in(),
             ),
             pystray.MenuItem(
+                "회원가입",
+                on_signup,
+                visible=lambda item: not auth_manager.is_logged_in(),
+            ),
+            pystray.MenuItem(
                 "로그아웃",
                 on_logout,
                 visible=lambda item: auth_manager.is_logged_in(),
@@ -72,7 +78,7 @@ def build_tray(
 
 # ── 트레이 상태 갱신 ──────────────────────────────────────────────────────────
 
-def set_tray_state(icon: pystray.Icon, baseline: float | None, is_turtle: bool):
+def set_tray_state(icon: "pystray.Icon", baseline: float | None, is_turtle: bool):  # type: ignore[reportInvalidTypeForm]
     """상태에 따른 아이콘 및 툴팁 업데이트."""
     if icon is None:
         return

@@ -110,6 +110,96 @@ def _ask_credentials() -> tuple[str | None, str | None]:
     return result["email"], result["pw"]
 
 
+def _ask_signup_credentials() -> tuple[str | None, str | None]:
+    """이메일 중복확인 버튼이 포함된 회원가입 폼 (단일 창)."""
+    result = {"email": None, "pw": None}
+    done   = threading.Event()
+
+    def _run():
+        root = tk.Tk()
+        root.title("회원가입")
+        root.resizable(False, False)
+        root.attributes("-topmost", True)
+
+        # ── 이메일 행 ──────────────────────────────────────────────
+        tk.Label(root, text="이메일:").grid(row=0, column=0, padx=10, pady=10, sticky="e")
+        email_var = tk.StringVar()
+        email_entry = tk.Entry(root, textvariable=email_var, width=24)
+        email_entry.grid(row=0, column=1, padx=4, pady=10)
+
+        email_ok = {"value": False}
+        status_lbl = tk.Label(root, text="", width=28, anchor="w")
+        status_lbl.grid(row=1, column=0, columnspan=3, padx=10, pady=(0, 4))
+
+        def on_check():
+            email = email_var.get().strip()
+            if not email:
+                status_lbl.config(text="이메일을 입력해주세요.", fg="red")
+                return
+            status_lbl.config(text="확인 중...", fg="gray")
+            root.update()
+            exists = auth_manager.check_email_exists(email)
+            if exists is None:
+                err = auth_manager.last_error or "UNKNOWN"
+                status_lbl.config(text=f"오류: {err}", fg="orange")
+                email_ok["value"] = True
+            elif exists:
+                status_lbl.config(text="이미 사용 중인 이메일입니다.", fg="red")
+                email_ok["value"] = False
+            else:
+                status_lbl.config(text="사용 가능한 이메일입니다.", fg="green")
+                email_ok["value"] = True
+            submit_btn.config(state="normal" if email_ok["value"] else "disabled")
+
+        tk.Button(root, text="중복확인", command=on_check).grid(
+            row=0, column=2, padx=6, pady=10
+        )
+
+        # ── 비밀번호 행 ────────────────────────────────────────────
+        tk.Label(root, text="비밀번호:").grid(row=2, column=0, padx=10, pady=6, sticky="e")
+        pw_var = tk.StringVar()
+        tk.Entry(root, textvariable=pw_var, show="*", width=24).grid(row=2, column=1, padx=4)
+
+        tk.Label(root, text="비밀번호 확인:").grid(row=3, column=0, padx=10, pady=6, sticky="e")
+        pw2_var = tk.StringVar()
+        tk.Entry(root, textvariable=pw2_var, show="*", width=24).grid(row=3, column=1, padx=4)
+
+        pw_status_lbl = tk.Label(root, text="", fg="red", width=28, anchor="w")
+        pw_status_lbl.grid(row=4, column=0, columnspan=3, padx=10, pady=(0, 4))
+
+        # ── 버튼 행 ────────────────────────────────────────────────
+        def on_submit():
+            if not email_ok["value"]:
+                status_lbl.config(text="이메일 중복확인을 먼저 해주세요.", fg="red")
+                return
+            pw  = pw_var.get()
+            pw2 = pw2_var.get()
+            if not pw:
+                pw_status_lbl.config(text="비밀번호를 입력해주세요.")
+                return
+            if pw != pw2:
+                pw_status_lbl.config(text="비밀번호가 일치하지 않습니다.")
+                return
+            result["email"] = email_var.get().strip()
+            result["pw"]    = pw
+            root.destroy()
+
+        def on_cancel():
+            root.destroy()
+
+        submit_btn = tk.Button(root, text="가입", command=on_submit, state="disabled")
+        submit_btn.grid(row=5, column=1, pady=10, sticky="e")
+        tk.Button(root, text="취소", command=on_cancel).grid(row=5, column=2, padx=6, pady=10)
+
+        root.protocol("WM_DELETE_WINDOW", on_cancel)
+        root.mainloop()
+        done.set()
+
+    threading.Thread(target=_run, daemon=True).start()
+    done.wait(timeout=120)
+    return result["email"], result["pw"]
+
+
 def _show_stats():
     """통계 팝업 (로그인 사용자 전용, 현재 로컬 데이터 기반 간단 요약)."""
     uid = auth_manager.get_uid()
@@ -176,6 +266,42 @@ def on_login(icon, item):
             notify("로그인 성공", f"안녕하세요, {auth_manager.get_email()}")
         else:
             notify("로그인 실패", "이메일/비밀번호를 확인하세요.")
+    threading.Thread(target=_flow, daemon=True).start()
+
+
+_SIGNUP_ERROR_MAP = {
+    "EMAIL_EXISTS":    "이미 사용 중인 이메일입니다.",
+    "WEAK_PASSWORD":   "비밀번호는 6자 이상이어야 합니다.",
+    "INVALID_EMAIL":   "올바른 이메일 형식이 아닙니다.",
+    "NETWORK_ERROR":   "네트워크 오류가 발생했습니다. 인터넷 연결을 확인하세요.",
+}
+
+def _show_signup_error(msg: str):
+    def _run():
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        messagebox.showerror("회원가입 실패", msg, parent=root)
+        root.destroy()
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def on_signup(icon, item):
+    def _flow():
+        email, pw = _ask_signup_credentials()
+        if not email or not pw:
+            return
+        uid = auth_manager.signup(email, pw)
+        if uid:
+            _switch_logger(uid)
+            notify("회원가입 성공", f"환영합니다, {auth_manager.get_email()}")
+        else:
+            error = auth_manager.last_error or ""
+            msg = next(
+                (v for k, v in _SIGNUP_ERROR_MAP.items() if k in error),
+                "회원가입에 실패했습니다. 다시 시도해주세요.",
+            )
+            _show_signup_error(msg)
     threading.Thread(target=_flow, daemon=True).start()
 
 
@@ -275,6 +401,7 @@ if __name__ == "__main__":
     tray_icon = build_tray(
         on_calibrate=on_calibrate,
         on_login=on_login,
+        on_signup=on_signup,
         on_logout=on_logout,
         on_stats=on_stats,
         on_quit=on_quit,

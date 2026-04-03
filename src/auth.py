@@ -11,6 +11,9 @@ from datetime import datetime
 _SIGN_IN_URL = (
     "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword"
 )
+_SIGN_UP_URL = (
+    "https://identitytoolkit.googleapis.com/v1/accounts:signUp"
+)
 
 
 class AuthManager:
@@ -29,6 +32,7 @@ class AuthManager:
         self.api_key = api_key
         self._uid: str | None = None
         self._email: str | None = None
+        self.last_error: str | None = None
 
     # ── 세션 유지 ──────────────────────────────────────────────────────────────
 
@@ -111,6 +115,80 @@ class AuthManager:
             print(f"[Auth] 로그인 실패: {reason}")
             return None
         except requests.exceptions.RequestException as e:
+            print(f"[Auth] 네트워크 오류: {e}")
+            return None
+
+    def check_email_exists(self, email: str) -> bool | None:
+        """
+        이메일 사용 여부 확인 (signInWithPassword 프로브 방식).
+        True=이미 사용 중, False=사용 가능, None=확인 불가
+        Firebase 이메일 열거 보호가 꺼져 있어야 정확히 동작.
+        """
+        if not self.api_key or not email:
+            return None
+        try:
+            resp = requests.post(
+                f"{_SIGN_IN_URL}?key={self.api_key}",
+                json={"email": email, "password": "__probe__", "returnSecureToken": False},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            # 200 응답은 사실상 불가능하지만 오면 존재함
+            return True
+        except requests.exceptions.HTTPError as e:
+            try:
+                reason = e.response.json()["error"]["message"]
+            except Exception:
+                reason = str(e)
+            print(f"[Auth] 이메일 확인: {reason}")
+            if "INVALID_PASSWORD" in reason or "INVALID_LOGIN_CREDENTIALS" in reason:
+                return True   # 이메일 존재, 비밀번호만 틀림
+            if "EMAIL_NOT_FOUND" in reason or "INVALID_EMAIL" in reason:
+                return False  # 이메일 없음 또는 형식 오류
+            self.last_error = reason
+            return None
+        except requests.exceptions.RequestException as e:
+            self.last_error = f"NETWORK: {e}"
+            print(f"[Auth] 이메일 확인 네트워크 오류: {e}")
+            return None
+
+    def signup(self, email: str, password: str) -> str | None:
+        """
+        Firebase Auth REST API 로 이메일/비밀번호 신규 계정 생성.
+        성공 시 uid(str) 반환, 실패 시 None.
+        """
+        if not self.api_key:
+            print("[Auth] firebase_api_key 가 config.json 에 설정되지 않았습니다.")
+            return None
+        if not email or not password:
+            return None
+        try:
+            resp = requests.post(
+                f"{_SIGN_UP_URL}?key={self.api_key}",
+                json={
+                    "email": email,
+                    "password": password,
+                    "returnSecureToken": True,
+                },
+                timeout=10,
+            )
+            resp.raise_for_status()
+            body = resp.json()
+            self._uid = body["localId"]
+            self._email = body["email"]
+            self.save_session()
+            print(f"[Auth] 회원가입 성공: {self._email} ({self._uid})")
+            return self._uid
+        except requests.exceptions.HTTPError as e:
+            try:
+                reason = e.response.json()["error"]["message"]
+            except Exception:
+                reason = str(e)
+            self.last_error = reason
+            print(f"[Auth] 회원가입 실패: {reason}")
+            return None
+        except requests.exceptions.RequestException as e:
+            self.last_error = "NETWORK_ERROR"
             print(f"[Auth] 네트워크 오류: {e}")
             return None
 
