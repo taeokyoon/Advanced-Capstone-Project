@@ -21,3 +21,4 @@ posture.db
 
 # Firebase Secret Key
 firebase_key.json
+logs/session.json
