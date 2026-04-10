@@ -28,6 +28,7 @@ from src.utils.firebase_uploader import FirebaseUploader
 from src.utils.upload_queue      import UploadQueue
 
 from PIL import Image, ImageTk
+import queue
 
 # ── 경로 설정 (개발/exe 공통) ─────────────────────────────────────────────────
 
@@ -64,6 +65,10 @@ last_save  = time.time()
 _logger_lock = threading.Lock()
 logger: PostureLogger = None
 upload_queue: UploadQueue | None = None
+
+image_queue = queue.Queue(maxsize=1)  # 카메라 스레드 -> 메인 스레드 이미지 전달용
+calibration_done_event = threading.Event()  # 캘리브레이션 완료 신호
+initial_calibration_complete = False  # 초기 캘리브레이션 완료 여부
 
 
 def _get_user_dir(uid: str | None) -> str:
@@ -296,8 +301,6 @@ def _show_stats():
         f"거북목 비율: {ratio:.1f}%"
     )
 
-    # ❌ 기존의 threading.Thread나 tk.Tk() 생성 코드를 모두 지우세요.
-    # ✅ 대신 우리가 만든 안전한 OS 알림창 함수 딱 하나만 호출합니다.
     _os_messagebox("통계 요약", msg, type="info")
 
 # ── 트레이 메뉴 콜백 ──────────────────────────────────────────────────────────
@@ -378,41 +381,175 @@ def on_quit(icon, item):
     stop_event.set()
     icon.stop()
 
+def on_open_gui(icon, item):
+    """트레이에서 '설정 화면 열기'를 눌렀을 때 호출됩니다."""
+    # 1. 카메라 루프가 다시 UI(런처)로 이미지를 쏘도록 신호를 끕니다.
+    calibration_done_event.clear() 
+    
+    # 2. 트레이 아이콘을 멈춥니다. 
+    # 이렇게 하면 메인 스레드의 tray_icon.run()이 종료되면서 
+    # while 루프의 처음(show_launcher_window)으로 돌아갑니다.
+    icon.stop()
+
+def show_calibration_window():
+    global initial_calibration_complete
+    root = tk.Tk()
+    root.title("초기 캘리브레이션 - 자세를 바로 잡아주세요")
+    
+    # 너비를 800 -> 900으로 늘리고 높이를 550 -> 600으로 넉넉하게 조정
+    root.geometry("950x600") 
+    root.eval('tk::PlaceWindow . center')
+
+    # 왼쪽 비디오 프레임
+    video_frame = tk.Frame(root, width=640, height=480, bg="black")
+    video_frame.pack(side="left", padx=20, pady=20)
+    img_label = tk.Label(video_frame)
+    img_label.pack()
+
+    # 오른쪽 컨트롤 프레임 (너비 고정)
+    control_frame = tk.Frame(root, width=250)
+    control_frame.pack(side="right", fill="both", expand=True, padx=20, pady=20)
+
+    tk.Label(control_frame, text="거북목 요정 AI", font=("Apple SD Gothic Neo", 20, "bold")).pack(pady=10)
+    
+    try:
+        img = Image.open(_MASCOT_PATH)
+        img = img.resize((150, 150), Image.Resampling.LANCZOS)
+        mascot_photo = ImageTk.PhotoImage(img)
+        mascot_label = tk.Label(control_frame, image=mascot_photo)
+        mascot_label.image = mascot_photo 
+        mascot_label.pack(pady=10)   
+    except: pass
+
+    tk.Label(control_frame, text="[단계 1]", fg="gray").pack()
+    
+    # 💡 ⭐️ wraplength를 추가하여 글자가 짤리지 않고 자동으로 줄바꿈되게 합니다.
+    instruction_lbl = tk.Label(control_frame, 
+                               text="정상 자세를 취한 뒤\n'자세 잡기 완료(P)'를 눌러주세요.", 
+                               font=("Apple SD Gothic Neo", 12), 
+                               fg="#333333", 
+                               justify="center",
+                               wraplength=220) # 프레임 너비에 맞춰 줄바꿈
+    instruction_lbl.pack(pady=20)
+
+    def do_calibration(event=None):
+        baseline = detector.calibrate() 
+        if baseline is not None:
+            instruction_lbl.config(text="설정 완료!\n이제 백그라운드 실행을 눌러주세요.", fg="#007aff")
+            p_btn.pack_forget()
+            start_btn.pack(pady=20, fill="x")
+            notify("성공", "기준값이 저장되었습니다.")
+        else:
+            # 💡 팁: 데이터가 쌓일 시간을 주어야 합니다. (최소 1초 이상 노출 후 클릭)
+            notify("잠시만요!", "데이터를 수집 중입니다. 1초 뒤에 다시 눌러주세요.")
+
+    p_btn = tk.Button(control_frame, 
+                  text="자세 잡기 완료 (P)", 
+                  font=("Apple SD Gothic Neo", 13, "bold"),
+                  fg="black", 
+                  bg="#007aff",        # 토스 블루 색상
+                  activebackground="#005bb5", 
+                  activeforeground="white",
+                  relief="flat", 
+                  cursor="hand2",
+                  height=2,
+                  command=do_calibration)
+    p_btn.pack(pady=10, fill="x")
+    
+    start_btn = tk.Button(control_frame, text="백그라운드 실행", height=2,
+                          command=lambda: [calibration_done_event.set(), root.destroy()], 
+                          fg="red", font=("Apple SD Gothic Neo", 13, "bold"))
+
+    root.bind('<p>', do_calibration)
+    root.bind('<P>', do_calibration)
+
+    def update_video_stream():
+        # 💡 ⭐️ [수정] 창이 닫히는 중이거나 이미 닫혔다면 더 이상 타이머를 돌리지 않습니다.
+        if not calibration_done_event.is_set():
+            try:
+                # 창이 존재하는지 확인
+                if not root.winfo_exists():
+                    return
+
+                frame = image_queue.get_nowait()
+                img = Image.fromarray(frame)
+                imgtk = ImageTk.PhotoImage(image=img)
+                
+                # 라벨이 살아있는지도 확인
+                if img_label.winfo_exists():
+                    img_label.imgtk = imgtk
+                    img_label.config(image=imgtk)
+                
+                # 15ms 후에 다시 실행 (창이 살아있을 때만)
+                root.after(15, update_video_stream)
+            except (queue.Empty, tk.TclError):
+                # 데이터가 없거나 창이 닫히는 찰나에 호출되면 타이머를 멈춥니다.
+                if root.winfo_exists():
+                    root.after(15, update_video_stream)
+            except Exception:
+                pass
+
+    root.after(10, update_video_stream)
+    root.mainloop()
+    
 # ── 카메라 루프 (백그라운드 스레드 1) ─────────────────────────────────────────
 
 def camera_loop():
     global last_save
-
     cap = cv2.VideoCapture(0)
-    if not cap.isOpened():
-        notify("오류", "카메라를 열 수 없습니다.")
-        return
+    
+    import mediapipe as mp
+    mp_pose = mp.solutions.pose
+    mp_drawing = mp.solutions.drawing_utils
+    drawing_spec = mp_drawing.DrawingSpec(thickness=1, circle_radius=1, color=(0, 255, 0))
+    pose_instance = getattr(detector, '_pose', None)
 
     while not stop_event.is_set():
         ok, frame = cap.read()
-        if not ok or frame is None:
-            continue
+        if not ok or frame is None: continue
 
-        score              = detector.process_frame(frame)
-        evaluated, changed = detector.update(score)
+        if not calibration_done_event.is_set():
+            # 💡 ⭐️ [수정] 캘리브레이션 중에도 점수를 계산해서 detector에 넣어줘야 합니다!
+            score = detector.process_frame(frame)
+            detector.update(score) # scores 데크에 데이터가 쌓임
 
-        if evaluated and detector.baseline_score is not None:
-            with _logger_lock:
-                logger.tick(detector.is_turtle)
-            if changed:
-                set_tray_state(tray_icon, detector.baseline_score, detector.is_turtle)
-                if detector.is_turtle:
-                    notify("거북목 감지!", "자세를 바로잡아 주세요.")
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            if pose_instance:
+                results = pose_instance.process(rgb_frame)
+                if results.pose_landmarks:
+                    mp_drawing.draw_landmarks(
+                        rgb_frame, results.pose_landmarks, mp_pose.POSE_CONNECTIONS,
+                        landmark_drawing_spec=drawing_spec, connection_drawing_spec=drawing_spec)
+            
+            rgb_frame = cv2.flip(rgb_frame, 1)
+            rgb_frame = cv2.resize(rgb_frame, (640, 480))
+            
+            try:
+                image_queue.put_nowait(rgb_frame)
+            except queue.Full:
+                try: image_queue.get_nowait()
+                except: pass
+                image_queue.put_nowait(rgb_frame)
+        
+        # [단계 2: 백그라운드 거북목 감지 모드]
+        else:
+            score              = detector.process_frame(frame)
+            evaluated, changed = detector.update(score)
 
-        now = time.time()
-        if detector.baseline_score is not None and now - last_save >= SAVE_INTERVAL:
-            last_save = now
-            with _logger_lock:
-                record = logger.flush_with_record()  # 레코드 반환 버전
+            if evaluated and detector.baseline_score is not None:
+                with _logger_lock:
+                    logger.tick(detector.is_turtle)
+                if changed:
+                    set_tray_state(tray_icon, detector.baseline_score, detector.is_turtle)
+                    if detector.is_turtle:
+                        notify("거북목 감지!", "자세를 바로잡아 주세요.")
 
-            # 로그인 상태이면 업로드 큐에 추가
-            if record and upload_queue is not None:
-                upload_queue.enqueue(record)
+            now = time.time()
+            if detector.baseline_score is not None and now - last_save >= SAVE_INTERVAL:
+                last_save = now
+                with _logger_lock: record = logger.flush_with_record()
+                if record and upload_queue is not None:
+                    upload_queue.enqueue(record)
 
     detector.close()
     cap.release()
@@ -454,129 +591,132 @@ def upload_loop():
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
 
+    
+
 # ── 1. 초기 런처(시작 화면) GUI 함수 추가 ────────────────────────────────────
 
 def show_launcher_window():
-    """앱 실행 시 가장 먼저 뜨는 메인 화면. 메인 스레드에서 실행됨."""
     root = tk.Tk()
-    root.title("거북목 교정기 시작")
-    root.geometry("300x500") 
+    root.title("거북목 교정기 - 로그인")
+    root.geometry("350x550") # 로그아웃 버튼 공간을 위해 높이를 살짝 키웠습니다.
+    root.configure(bg="#ffffff")
     root.eval('tk::PlaceWindow . center')
 
-    # 마스코트 이미지 처리
+    # 🐢 마스코트
     try:
         img = Image.open(_MASCOT_PATH)
-        img = img.resize((200, 200), Image.Resampling.LANCZOS)
+        img = img.resize((150, 150), Image.Resampling.LANCZOS)
         mascot_photo = ImageTk.PhotoImage(img)
-        img_label = tk.Label(root, image=mascot_photo)
-        img_label.image = mascot_photo 
-        img_label.pack(anchor="w", pady=(20, 10), padx=20)   
-    except Exception as e:
-        print(f"이미지를 불러올 수 없습니다: {e}")
-        tk.Label(root, text="🐢", font=("Helvetica", 60)).pack(pady=20)
+        tk.Label(root, image=mascot_photo, bg="white").pack(pady=(30, 10))
+    except: pass
 
-    tk.Label(root, text="거북목 교정 프로그램", font=("Helvetica", 16, "bold")).pack(pady=5)
-
-    # 상태 표시 라벨 설정
+    tk.Label(root, text="거북목 요정 AI", font=("Apple SD Gothic Neo", 22, "bold"), bg="white").pack()
+    
     status_var = tk.StringVar()
-    is_logged_in = auth_manager.get_uid() is not None
-
-    if is_logged_in:
-        status_var.set(f"환영합니다, {auth_manager.get_email()}님!")
-    else:
-        status_var.set("비로그인 상태입니다. 로그인해주세요.")
     
-    tk.Label(root, textvariable=status_var, fg="blue").pack(pady=5)
+    # 💡 UI 요소들을 미리 선언 (나중에 숨기기/보이기를 위해)
+    login_frame = tk.Frame(root, bg="white")
+    start_btn = tk.Button(root, text="자세 설정 시작하기", width=25, height=2, 
+                          bg="#007aff", fg="black", font=("Apple SD Gothic Neo", 13, "bold"),
+                          command=root.destroy)
+    
+    # 💡 [추가] 로그아웃 버튼 (텍스트 스타일로 깔끔하게)
+    logout_btn = tk.Button(root, text="로그아웃", width=25, height=2, 
+                          bg="#007aff", fg="black", font=("Apple SD Gothic Neo", 13, "bold"),
+                           command=lambda: handle_logout())
 
-    # 💡 1. 나중에 보여줄 버튼과 숨길 프레임을 미리 선언합니다.
-    def on_start_btn():
-        root.destroy()
-        
-    start_btn = tk.Button(root, text="백그라운드 실행 (카메라 켜기)", width=25, command=on_start_btn, fg="red")
-    login_frame = tk.Frame(root) # 로그인, 회원가입 버튼을 묶어둘 상자
+    def update_ui_state():
+        """로그인 상태에 따라 버튼 구성을 바꿉니다."""
+        is_logged_in = auth_manager.get_uid() is not None
+        if is_logged_in:
+            status_var.set(f"환영합니다!\n{auth_manager.get_email()}님")
+            login_frame.pack_forget()
+            start_btn.pack(pady=(30, 5))
+            logout_btn.pack(pady=5) # 로그인 됐을 때만 로그아웃 버튼 노출
+        else:
+            status_var.set("반가워요!\n로그인이 필요해요")
+            start_btn.pack_forget()
+            logout_btn.pack_forget()
+            login_frame.pack(pady=20)
 
-    def show_start_button():
-        """UI 전환: 로그인 프레임을 숨기고 시작 버튼을 나타냅니다."""
-        login_frame.pack_forget() # 버튼 상자 숨기기
-        start_btn.pack(pady=20)   # 시작 버튼 보이기
+    # 💡 [추가] 로그아웃 로직
+    def handle_logout():
+        auth_manager.logout()
+        _switch_logger(None)
+        update_ui_state() # UI 새로고침
 
-    # 💡 2. 로그인/회원가입 로직
-    def on_login_btn():
+    # 로그인/회원가입 콜백
+    def handle_login():
         email, pw = _ask_credentials()
-        if email and pw:
-            uid = auth_manager.login(email, pw)
-            if uid:
-                _switch_logger(uid)
-                status_var.set(f"환영합니다, {auth_manager.get_email()}님!")
-                show_start_button() # 로그인 성공 시 버튼 전환!
-            else:
-                _os_messagebox("실패", "로그인에 실패했습니다.", type="error")
-
-    def on_signup_btn():
+        if email and pw and auth_manager.login(email, pw):
+            _switch_logger(auth_manager.get_uid())
+            update_ui_state()
+            
+    def handle_signup():
         email, pw = _ask_signup_credentials()
-        if email and pw:
-            uid = auth_manager.signup(email, pw)
-            if uid:
-                _switch_logger(uid)
-                status_var.set(f"환영합니다, {auth_manager.get_email()}님!")
-                _os_messagebox("가입 성공", f"환영합니다!", type="info")
-                show_start_button() # 회원가입 성공 시 버튼 전환!
-            else:
-                error = auth_manager.last_error or ""
-                msg = next(
-                    (v for k, v in _SIGNUP_ERROR_MAP.items() if k in error),
-                    "회원가입에 실패했습니다. 다시 시도해주세요.",
-                )
-                _os_messagebox("회원가입 실패", msg, type="error")
+        if email and pw and auth_manager.signup(email, pw):
+            _switch_logger(auth_manager.get_uid())
+            update_ui_state()
 
-    # 프레임(상자) 안에 로그인/회원가입 버튼 넣기
-    tk.Button(login_frame, text="로그인", width=15, command=on_login_btn).pack(pady=5)
-    tk.Button(login_frame, text="회원가입", width=15, command=on_signup_btn).pack(pady=5) 
-    
-    # 💡 3. 초기 상태 분기 처리
-    # 앱을 처음 켰을 때, 이미 세션이 있어서 로그인된 상태라면 바로 '시작'을 보여주고,
-    # 아니라면 '로그인' 프레임을 보여줍니다.
-    if is_logged_in:
-        start_btn.pack(pady=20)
-    else:
-        login_frame.pack(pady=10)
+    tk.Label(root, textvariable=status_var, font=("Apple SD Gothic Neo", 12), 
+             fg="#6b7684", bg="white", justify="center").pack(pady=10)
 
-    # x 버튼을 눌러 창을 닫았을 때 앱이 완전히 종료되도록 처리
+    # 로그인 프레임 내부 버튼
+    tk.Button(login_frame, text="로그인", width=20, height=2, command=handle_login).pack(pady=5)
+    tk.Button(login_frame, text="회원가입", width=20, height=2, command=handle_signup).pack(pady=5)
+
+    # 초기 상태 설정
+    update_ui_state()
+
     def on_closing():
-        import sys
         root.destroy()
         sys.exit() 
-        
     root.protocol("WM_DELETE_WINDOW", on_closing)
     root.mainloop()
 
 # ── 진입점 ────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    # 1. 앱 시작 시 인증 정보(세션) 먼저 로드
+    # 1. 초기 세션 로드
     auth_manager.load_session()
     _switch_logger(auth_manager.get_uid())
 
-    # 2. 초기 런처 화면 띄우기 (카메라 켜기 전)
-    # 이 함수가 끝날 때까지(시작 버튼을 누를 때까지) 아래 코드는 실행되지 않음.
-    show_launcher_window()
+    # 💡 [추가] 카메라와 업로드 스레드가 이미 시작되었는지 확인하는 깃발
+    threads_started = False
 
-    # --- 여기서부터는 '시작' 버튼을 누른 후의 동작 (백그라운드 진입) ---
+    while not stop_event.is_set():
+        
+        # [단계 1] 로그인/런처 창 띄우기 (카메라 아직 안 켜짐 ❌)
+        show_launcher_window()
+        
+        if stop_event.is_set(): 
+            break
 
-    # 3. 백그라운드 스레드 가동
-    threading.Thread(target=camera_loop, daemon=True).start()
-    threading.Thread(target=upload_loop, daemon=True).start()
+        # 💡 [수정] 로그인 성공 후 '자세 설정 시작하기'를 눌러 런처가 닫히면
+        # 이때 비로소 카메라와 업로드 스레드를 실행합니다.
+        if not threads_started:
+            threading.Thread(target=camera_loop, daemon=True).start()
+            threading.Thread(target=upload_loop, daemon=True).start()
+            threads_started = True # 다시는 실행되지 않도록 깃발을 올림
 
-    # 4. 시스템 트레이 실행 (메인 스레드 점유)
-    tray_icon = build_tray(
-        on_calibrate=on_calibrate,
-        on_login=on_login, # 트레이에서도 로그인할 수 있게 유지
-        on_signup=on_signup,
-        on_logout=on_logout,
-        on_stats=on_stats,
-        on_quit=on_quit,
-        auth_manager=auth_manager,
-    )
-    
-    notify("실행됨", "거북목 교정기가 백그라운드에서 실행됩니다.")
-    tray_icon.run()
+        # [단계 2] 캘리브레이션 창 띄우기 (카메라 화면 나옴 ✅)
+        calibration_done_event.clear() 
+        show_calibration_window()
+        
+        if stop_event.is_set(): 
+            break
+
+        # [단계 3] 트레이 실행
+        tray_icon = build_tray(
+            on_calibrate=on_calibrate,
+            on_stats=on_stats,
+            on_quit=on_quit,
+            on_open_gui=on_open_gui, # 이 함수가 로그인/로그아웃 창으로 보내주는 역할
+            auth_manager=auth_manager,
+        )
+        
+        # 아이콘 색상 즉시 업데이트
+        set_tray_state(tray_icon, detector.baseline_score, detector.is_turtle)
+        
+        notify("백그라운드 모드", "트레이 메뉴에서 언제든 설정 화면을 다시 열 수 있습니다.")
+        tray_icon.run()

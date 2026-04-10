@@ -32,50 +32,29 @@ def notify(title: str, msg: str):
 
 def build_tray(
     on_calibrate,
-    on_login,
-    on_signup,
-    on_logout,
     on_stats,
     on_quit,
+    on_open_gui, # 설정 화면 열기
     auth_manager,
-) -> "pystray.Icon":  # type: ignore[reportInvalidTypeForm]
+    ) -> "pystray.Icon":
     """
-    트레이 아이콘 객체 생성.
-
-    메뉴 항목 가시성은 auth_manager.is_logged_in() 으로 런타임에 결정:
-      비로그인: 캘리브레이션 | 로그인 | 종료
-      로그인:   캘리브레이션 | 통계 보기 | 로그아웃 | 종료
+    트레이 아이콘 빌드 (로그인/로그아웃/회원가입 제거 버전)
     """
     return pystray.Icon(
         "turtle_neck",
         icon=ICON_GRAY,
-        title=f"{APP_ID} — 캘리브레이션 필요",
+        title=f"{APP_ID}",
         menu=pystray.Menu(
-            pystray.MenuItem("캘리브레이션", on_calibrate, default=True),
-            pystray.MenuItem(
-                "통계 보기",
-                on_stats,
-                visible=lambda item: auth_manager.is_logged_in(),
-            ),
-            pystray.MenuItem(
-                "로그인",
-                on_login,
-                visible=lambda item: not auth_manager.is_logged_in(),
-            ),
-            pystray.MenuItem(
-                "회원가입",
-                on_signup,
-                visible=lambda item: not auth_manager.is_logged_in(),
-            ),
-            pystray.MenuItem(
-                "로그아웃",
-                on_logout,
-                visible=lambda item: auth_manager.is_logged_in(),
-            ),
+            pystray.MenuItem("설정 화면 열기", on_open_gui, default=True),
+            pystray.MenuItem("자세 기준 재설정(P)", on_calibrate),
+            
+            pystray.Menu.SEPARATOR,
+            
+            # 통계는 로그인이 필요한 기능이므로 visible 유지
+            pystray.MenuItem("통계 보기", on_stats, visible=lambda item: auth_manager.is_logged_in()),
             pystray.MenuItem("종료", on_quit),
         ),
     )
-
 # ── 트레이 상태 갱신 ──────────────────────────────────────────────────────────
 
 def set_tray_state(icon: "pystray.Icon", baseline: float | None, is_turtle: bool):  # type: ignore[reportInvalidTypeForm]

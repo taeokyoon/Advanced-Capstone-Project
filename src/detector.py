@@ -22,6 +22,7 @@ class PostureDetector:
         self._last_eval: float = time.time()
 
         self._mp_pose = mp.solutions.pose
+        self._mp_drawing = mp.solutions.drawing_utils
         self._pose    = self._mp_pose.Pose(
             static_image_mode=False,
             model_complexity=1,
