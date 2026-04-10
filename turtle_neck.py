@@ -14,6 +14,7 @@ import sys
 import threading
 import time
 import tkinter as tk
+from datetime import datetime
 from tkinter import simpledialog, messagebox
 
 from src.auth              import AuthManager
@@ -375,13 +376,15 @@ def upload_loop():
         if not pending:
             continue
 
-        # 임시 파일에 pending 레코드를 모아 업로드
-        user_dir  = _get_user_dir(uid)
-        tmp_path  = os.path.join(user_dir, "_upload_tmp.jsonl")
+        # 누적 데이터 전체를 Firestore에 반영 (덮어쓰기 방식이므로 done+pending 모두 포함)
+        user_dir   = _get_user_dir(uid)
+        doc_name   = datetime.now().strftime("%Y-%m-%d_%H")
+        tmp_path   = os.path.join(user_dir, f"{doc_name}.jsonl")
+        all_entries = upload_queue.get_all_records(hour_prefix=doc_name)
         try:
             with open(tmp_path, "w", encoding="utf-8") as f:
-                for entry in pending:
-                    f.write(json.dumps(entry["record"], ensure_ascii=False) + "\n")
+                for record in all_entries:
+                    f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
             if uploader.upload_log_file(tmp_path, uid):
                 done_ids = [e["id"] for e in pending]

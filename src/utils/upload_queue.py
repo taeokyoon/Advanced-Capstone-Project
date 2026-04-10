@@ -42,6 +42,19 @@ class UploadQueue:
         """status == 'pending' 인 항목 목록 반환."""
         return [e for e in self._read_all() if e.get("status") == "pending"]
 
+    def get_all_records(self, hour_prefix: str | None = None) -> list[dict]:
+        """done + pending 전체 레코드를 반환.
+
+        hour_prefix: "2026-04-10_11" 형태로 전달하면 해당 시간대 레코드만 반환.
+        None이면 전체 반환.
+        """
+        entries = [e["record"] for e in self._read_all() if e.get("status") in ("done", "pending")]
+        if hour_prefix:
+            # "2026-04-10_11" → "2026-04-10T11" (timestamp 필드 prefix 형식으로 변환)
+            ts_prefix = hour_prefix.replace("_", "T")
+            entries = [r for r in entries if r.get("timestamp", "").startswith(ts_prefix)]
+        return entries
+
     # ── 상태 업데이트 ─────────────────────────────────────────────────────────
 
     def mark_done(self, entry_ids: list[str]):
