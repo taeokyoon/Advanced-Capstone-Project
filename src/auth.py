@@ -89,6 +89,9 @@ class AuthManager:
             return None
         if not email or not password:
             return None
+        # 로그인 시도 전 기존 세션 초기화 — 실패해도 이전 세션 잔존 방지
+        self._uid = None
+        self._email = None
         try:
             resp = requests.post(
                 f"{_SIGN_IN_URL}?key={self.api_key}",

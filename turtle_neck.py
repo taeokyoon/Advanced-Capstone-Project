@@ -412,3 +412,4 @@ if __name__ == "__main__":
     threading.Thread(target=upload_loop, daemon=True).start()
 
     tray_icon.run()
+
