@@ -10,12 +10,14 @@ turtle_neck.py — 진입점 (Entry Point)
 import cv2
 import json
 import os
+import queue
 import sys
 import threading
 import time
 import tkinter as tk
 from datetime import datetime
-from tkinter import simpledialog, messagebox
+from tkinter import messagebox
+from PIL import Image
 
 from src.auth              import AuthManager
 from src.detector          import PostureDetector
@@ -50,9 +52,13 @@ auth_manager = AuthManager(
 
 detector   = PostureDetector(cfg["delta_turtle"], cfg["delta_ok"])
 uploader   = FirebaseUploader(_FIREBASE_KEY_PATH)
-stop_event = threading.Event()
-tray_icon  = None
-last_save  = time.time()
+stop_event        = threading.Event()
+tray_icon         = None
+last_save         = time.time()
+_tk_root:         tk.Tk | None  = None
+_tk_auth_queue:   queue.Queue   = queue.Queue()
+_show_visual:     bool          = False
+_live_frame_queue: queue.Queue  = queue.Queue(maxsize=2)
 
 # logger / upload_queue 는 로그인 상태에 따라 교체 가능 → 전역 참조
 _logger_lock = threading.Lock()
@@ -87,239 +93,92 @@ def _switch_logger(uid: str | None):
 auth_manager.load_session()
 _switch_logger(auth_manager.get_uid())
 
-# ── 로그인 다이얼로그 (별도 스레드에서 tkinter 실행) ──────────────────────────
 
-def _ask_credentials() -> tuple[str | None, str | None]:
-    """tkinter 다이얼로그로 이메일/비밀번호 입력 받기 (blocking)."""
-    result = {"email": None, "pw": None}
-    done   = threading.Event()
-
-    def _run():
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes("-topmost", True)
-        email = simpledialog.askstring("로그인", "이메일:", parent=root)
-        if email:
-            pw = simpledialog.askstring("로그인", "비밀번호:", show="*", parent=root)
-            result["email"] = email
-            result["pw"]    = pw
-        root.destroy()
-        done.set()
-
-    threading.Thread(target=_run, daemon=True).start()
-    done.wait(timeout=120)
-    return result["email"], result["pw"]
+def _start_visual():
+    global _show_visual
+    _show_visual = True
 
 
-def _ask_signup_credentials() -> tuple[str | None, str | None]:
-    """이메일 중복확인 버튼이 포함된 회원가입 폼 (단일 창)."""
-    result = {"email": None, "pw": None}
-    done   = threading.Event()
-
-    def _run():
-        root = tk.Tk()
-        root.title("회원가입")
-        root.resizable(False, False)
-        root.attributes("-topmost", True)
-
-        # ── 이메일 행 ──────────────────────────────────────────────
-        tk.Label(root, text="이메일:").grid(row=0, column=0, padx=10, pady=10, sticky="e")
-        email_var = tk.StringVar()
-        email_entry = tk.Entry(root, textvariable=email_var, width=24)
-        email_entry.grid(row=0, column=1, padx=4, pady=10)
-
-        email_ok = {"value": False}
-        status_lbl = tk.Label(root, text="", width=28, anchor="w")
-        status_lbl.grid(row=1, column=0, columnspan=3, padx=10, pady=(0, 4))
-
-        def on_check():
-            email = email_var.get().strip()
-            if not email:
-                status_lbl.config(text="이메일을 입력해주세요.", fg="red")
-                return
-            status_lbl.config(text="확인 중...", fg="gray")
-            root.update()
-            exists = auth_manager.check_email_exists(email)
-            if exists is None:
-                err = auth_manager.last_error or "UNKNOWN"
-                status_lbl.config(text=f"오류: {err}", fg="orange")
-                email_ok["value"] = True
-            elif exists:
-                status_lbl.config(text="이미 사용 중인 이메일입니다.", fg="red")
-                email_ok["value"] = False
-            else:
-                status_lbl.config(text="사용 가능한 이메일입니다.", fg="green")
-                email_ok["value"] = True
-            submit_btn.config(state="normal" if email_ok["value"] else "disabled")
-
-        tk.Button(root, text="중복확인", command=on_check).grid(
-            row=0, column=2, padx=6, pady=10
-        )
-
-        # ── 비밀번호 행 ────────────────────────────────────────────
-        tk.Label(root, text="비밀번호:").grid(row=2, column=0, padx=10, pady=6, sticky="e")
-        pw_var = tk.StringVar()
-        tk.Entry(root, textvariable=pw_var, show="*", width=24).grid(row=2, column=1, padx=4)
-
-        tk.Label(root, text="비밀번호 확인:").grid(row=3, column=0, padx=10, pady=6, sticky="e")
-        pw2_var = tk.StringVar()
-        tk.Entry(root, textvariable=pw2_var, show="*", width=24).grid(row=3, column=1, padx=4)
-
-        pw_status_lbl = tk.Label(root, text="", fg="red", width=28, anchor="w")
-        pw_status_lbl.grid(row=4, column=0, columnspan=3, padx=10, pady=(0, 4))
-
-        # ── 버튼 행 ────────────────────────────────────────────────
-        def on_submit():
-            if not email_ok["value"]:
-                status_lbl.config(text="이메일 중복확인을 먼저 해주세요.", fg="red")
-                return
-            pw  = pw_var.get()
-            pw2 = pw2_var.get()
-            if not pw:
-                pw_status_lbl.config(text="비밀번호를 입력해주세요.")
-                return
-            if pw != pw2:
-                pw_status_lbl.config(text="비밀번호가 일치하지 않습니다.")
-                return
-            result["email"] = email_var.get().strip()
-            result["pw"]    = pw
-            root.destroy()
-
-        def on_cancel():
-            root.destroy()
-
-        submit_btn = tk.Button(root, text="가입", command=on_submit, state="disabled")
-        submit_btn.grid(row=5, column=1, pady=10, sticky="e")
-        tk.Button(root, text="취소", command=on_cancel).grid(row=5, column=2, padx=6, pady=10)
-
-        root.protocol("WM_DELETE_WINDOW", on_cancel)
-        root.mainloop()
-        done.set()
-
-    threading.Thread(target=_run, daemon=True).start()
-    done.wait(timeout=120)
-    return result["email"], result["pw"]
-
+def _stop_visual():
+    global _show_visual
+    _show_visual = False
 
 def _show_stats():
-    """통계 팝업"""
+    """통계 팝업 — 로컬 posture_log.jsonl 에서 오늘 데이터 집계."""
     uid = auth_manager.get_uid()
     if not uid:
-        def _show_login_warn():
-            root = tk.Tk(); root.withdraw()
-            root.attributes("-topmost", True)
-            messagebox.showwarning("알림", "로그인이 필요한 서비스입니다.", parent=root)
-            root.destroy()
-        threading.Thread(target=_show_login_warn, daemon=True).start()
         return
 
-    # 연결 상태 정밀 진단
-    db_status = ""
-    stats = None
-    
-    # FirebaseUploader가 정상적으로 초기화되었는지 확인
-    if not uploader._available:
-        db_status = "DB 연결 실패 (firebase_key.json 파일 없음!)"
-    else:
-        try:
-            doc_ref = uploader.db.collection("day").document(uid)
-            doc = doc_ref.get()
-            if doc.exists:
-                stats = doc.to_dict()
-                db_status = "DB 연결 및 데이터 조회 성공!"
-            else:
-                db_status = "연결 성공 (하지만 day 컬렉션에 데이터가 없음)"
-        except Exception as e:
-            db_status = f"에러 발생: {e}"
+    user_dir = _get_user_dir(uid)
+    log_path = os.path.join(user_dir, "posture_log.jsonl")
+    today    = datetime.now().strftime("%Y-%m-%d")
 
-    if stats:
-        total_secs = stats.get("total_seconds", 0)
-        turtle_secs = stats.get("turtle_seconds", 0)
-    else:
-        total_secs = 0
-        turtle_secs = 0
+    total_secs  = 0
+    turtle_secs = 0
+    count       = 0
 
-    count = total_secs // 60 
+    if os.path.exists(log_path):
+        with open(log_path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                    if rec.get("timestamp", "").startswith(today):
+                        total_secs  += rec.get("total_seconds", 0)
+                        turtle_secs += rec.get("turtle_seconds", 0)
+                        count       += 1
+                except json.JSONDecodeError:
+                    continue
+
     ratio = (turtle_secs / total_secs * 100) if total_secs > 0 else 0
-    
-    msg = (
+    msg   = (
         f"계정: {auth_manager.get_email()}\n"
-        f"UID: {uid}\n"
-        f"상태: {db_status}\n"
-        f"---------------------------\n"
-        f"누적 기록: 약 {count}건(분)\n"
-        f"총 측정: {total_secs // 60}분\n"
+        f"오늘 기록: {count}건 ({total_secs // 60}분)\n"
         f"거북목 비율: {ratio:.1f}%\n"
-        f"*(서버 동기화 데이터 기준)*"
+        f"거북목 시간: {turtle_secs // 60}분"
     )
 
     def _show():
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes("-topmost", True)
-        messagebox.showinfo("통계 요약", msg, parent=root)
-        root.destroy()
+        messagebox.showinfo("오늘의 통계", msg, parent=_tk_root)
 
-    threading.Thread(target=_show, daemon=True).start()
+    _tk_auth_queue.put(_show)
 
 # ── 트레이 메뉴 콜백 ──────────────────────────────────────────────────────────
 
 def on_calibrate(icon, item):
-    baseline = detector.calibrate()
-    if baseline is not None:
-        set_tray_state(icon, baseline, detector.is_turtle)
-        notify("캘리브레이션 완료", f"기준값: {baseline:.3f}")
-    else:
-        notify("캘리브레이션 실패", "자세가 감지되지 않습니다. 잠시 후 재시도하세요.")
+    def _show():
+        from src.startup_window import CalibrationWindow
+        CalibrationWindow(
+            detector=detector,
+            live_frame_queue=_live_frame_queue,
+            start_visual=_start_visual,
+            stop_visual=_stop_visual,
+            parent=_tk_root,
+        ).show_in_main_thread()
+    _tk_auth_queue.put(_show)
 
 
 def on_login(icon, item):
     def _flow():
-        email, pw = _ask_credentials()
-        if not email or not pw:
-            return
-        uid = auth_manager.login(email, pw)
-        if uid:
-            _switch_logger(uid)
+        done   = threading.Event()
+        result = {"uid": None}
+
+        def _show():
+            from src.startup_window import AuthWindow
+            def _complete(uid):
+                result["uid"] = uid
+                done.set()
+            AuthWindow(auth_manager, parent=_tk_root).show_in_main_thread(_complete)
+
+        _tk_auth_queue.put(_show)
+        done.wait(timeout=180)
+        if result["uid"]:
+            _switch_logger(result["uid"])
             notify("로그인 성공", f"안녕하세요, {auth_manager.get_email()}")
-        else:
-            notify("로그인 실패", "이메일/비밀번호를 확인하세요.")
-    threading.Thread(target=_flow, daemon=True).start()
+            icon.update_menu()
 
-
-_SIGNUP_ERROR_MAP = {
-    "EMAIL_EXISTS":    "이미 사용 중인 이메일입니다.",
-    "WEAK_PASSWORD":   "비밀번호는 6자 이상이어야 합니다.",
-    "INVALID_EMAIL":   "올바른 이메일 형식이 아닙니다.",
-    "NETWORK_ERROR":   "네트워크 오류가 발생했습니다. 인터넷 연결을 확인하세요.",
-}
-
-def _show_signup_error(msg: str):
-    def _run():
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes("-topmost", True)
-        messagebox.showerror("회원가입 실패", msg, parent=root)
-        root.destroy()
-    threading.Thread(target=_run, daemon=True).start()
-
-
-def on_signup(icon, item):
-    def _flow():
-        email, pw = _ask_signup_credentials()
-        if not email or not pw:
-            return
-        uid = auth_manager.signup(email, pw)
-        if uid:
-            _switch_logger(uid)
-            notify("회원가입 성공", f"환영합니다, {auth_manager.get_email()}")
-        else:
-            error = auth_manager.last_error or ""
-            msg = next(
-                (v for k, v in _SIGNUP_ERROR_MAP.items() if k in error),
-                "회원가입에 실패했습니다. 다시 시도해주세요.",
-            )
-            _show_signup_error(msg)
     threading.Thread(target=_flow, daemon=True).start()
 
 
@@ -327,6 +186,7 @@ def on_logout(icon, item):
     auth_manager.logout()
     _switch_logger(None)
     notify("로그아웃", "비로그인 모드로 전환됩니다.")
+    icon.update_menu()
 
 
 def on_stats(icon, item):
@@ -336,6 +196,7 @@ def on_stats(icon, item):
 def on_quit(icon, item):
     stop_event.set()
     icon.stop()
+    _tk_auth_queue.put(lambda: _tk_root.quit() if _tk_root else None)
 
 # ── 카메라 루프 (백그라운드 스레드 1) ─────────────────────────────────────────
 
@@ -354,7 +215,17 @@ def camera_loop():
         if not ok or frame is None:
             continue
 
-        score              = detector.process_frame(frame)
+        if _show_visual:
+            score, rgb = detector.process_frame_visual(frame)
+            try:
+                _live_frame_queue.put_nowait(
+                    Image.fromarray(rgb).resize((420, 315), Image.BILINEAR)
+                )
+            except queue.Full:
+                pass
+        else:
+            score = detector.process_frame(frame)
+
         evaluated, changed = detector.update(score)
 
         if evaluated and detector.baseline_score is not None:
@@ -444,7 +315,6 @@ if __name__ == "__main__":
     tray_icon = build_tray(
         on_calibrate=on_calibrate,
         on_login=on_login,
-        on_signup=on_signup,
         on_logout=on_logout,
         on_stats=on_stats,
         on_quit=on_quit,
@@ -457,8 +327,23 @@ if __name__ == "__main__":
 
     threading.Thread(target=camera_loop, daemon=True).start()
     threading.Thread(target=upload_loop, daemon=True).start()
+    threading.Thread(target=tray_icon.run, daemon=True).start()
 
-    tray_icon.run()
+    # 메인 스레드: 인증·알림 팝업 전용 tkinter 이벤트 루프
+    _tk_root = tk.Tk()
+    _tk_root.withdraw()
 
-#test
-#test
+    def _poll_auth():
+        try:
+            while True:
+                fn = _tk_auth_queue.get_nowait()
+                fn()
+        except queue.Empty:
+            pass
+        if not stop_event.is_set():
+            _tk_root.after(200, _poll_auth)
+        else:
+            _tk_root.quit()
+
+    _tk_root.after(200, _poll_auth)
+    _tk_root.mainloop()

@@ -33,7 +33,6 @@ def notify(title: str, msg: str):
 def build_tray(
     on_calibrate,
     on_login,
-    on_signup,
     on_logout,
     on_stats,
     on_quit,
@@ -60,11 +59,6 @@ def build_tray(
             pystray.MenuItem(
                 "로그인",
                 on_login,
-                visible=lambda item: not auth_manager.is_logged_in(),
-            ),
-            pystray.MenuItem(
-                "회원가입",
-                on_signup,
                 visible=lambda item: not auth_manager.is_logged_in(),
             ),
             pystray.MenuItem(
