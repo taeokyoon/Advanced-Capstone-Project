@@ -424,6 +424,23 @@ def upload_loop():
 # ── 진입점 ────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    from src.startup_window import StartupWindow
+
+    # ── Phase 1: 시작 창 (카메라 피드 + 로그인/캘리브레이션) ──────────────────
+    _startup_done = threading.Event()
+
+    StartupWindow(
+        detector=detector,
+        auth_manager=auth_manager,
+        on_done=_startup_done.set,
+        switch_logger=_switch_logger,
+    ).run()
+
+    # 창을 X 버튼으로 닫으면 _startup_done 미설정 → 앱 종료
+    if not _startup_done.is_set():
+        raise SystemExit(0)
+
+    # ── Phase 2: 트레이 모드 ──────────────────────────────────────────────────
     tray_icon = build_tray(
         on_calibrate=on_calibrate,
         on_login=on_login,
@@ -433,6 +450,10 @@ if __name__ == "__main__":
         on_quit=on_quit,
         auth_manager=auth_manager,
     )
+
+    # 시작 창에서 이미 캘리브레이션 완료된 경우 트레이 아이콘 즉시 갱신
+    if detector.baseline_score is not None:
+        set_tray_state(tray_icon, detector.baseline_score, detector.is_turtle)
 
     threading.Thread(target=camera_loop, daemon=True).start()
     threading.Thread(target=upload_loop, daemon=True).start()

@@ -31,26 +31,37 @@ class PostureDetector:
         )
 
     # ── 프레임 처리 ───────────────────────────────────────────────────────────
-    def process_frame(self, frame) -> float | None:
+    def _calc_score(self, lms) -> "float | None":
+        """랜드마크 배열에서 head_forward_score 계산."""
+        NOSE = lms[self._mp_pose.PoseLandmark.NOSE.value]
+        LS   = lms[self._mp_pose.PoseLandmark.LEFT_SHOULDER.value]
+        RS   = lms[self._mp_pose.PoseLandmark.RIGHT_SHOULDER.value]
+        if min(LS.visibility, RS.visibility) <= 0.5:
+            return None
+        sw = abs(LS.x - RS.x)
+        if sw <= 0.05:
+            return None
+        return ((LS.y + RS.y) / 2 - NOSE.y) / sw
+
+    def process_frame(self, frame) -> "float | None":
         """BGR 프레임을 받아 head_forward_score 반환. 감지 실패 시 None."""
         result = self._pose.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
         if not result.pose_landmarks:
             return None
+        return self._calc_score(result.pose_landmarks.landmark)
 
-        lms  = result.pose_landmarks.landmark
-        NOSE = lms[self._mp_pose.PoseLandmark.NOSE.value]
-        LS   = lms[self._mp_pose.PoseLandmark.LEFT_SHOULDER.value]
-        RS   = lms[self._mp_pose.PoseLandmark.RIGHT_SHOULDER.value]
-
-        if min(LS.visibility, RS.visibility) <= 0.5:
-            return None
-
-        sw = abs(LS.x - RS.x)
-        if sw <= 0.05:
-            return None
-
-        shoulder_y = (LS.y + RS.y) / 2
-        return (shoulder_y - NOSE.y) / sw
+    def process_frame_visual(self, frame) -> "tuple[float | None, object]":
+        """BGR 프레임 처리 후 (score, rgb_annotated) 반환. 시작 창 시각화 전용."""
+        rgb    = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        result = self._pose.process(rgb)
+        if not result.pose_landmarks:
+            return None, rgb
+        mp.solutions.drawing_utils.draw_landmarks(
+            rgb,
+            result.pose_landmarks,
+            self._mp_pose.POSE_CONNECTIONS,
+        )
+        return self._calc_score(result.pose_landmarks.landmark), rgb
 
     # ── 상태 갱신 (1초마다 판정) ──────────────────────────────────────────────
     def update(self, score: float | None) -> tuple[bool, bool]:
