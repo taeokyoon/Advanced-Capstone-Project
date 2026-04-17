@@ -202,38 +202,55 @@ def _ask_signup_credentials() -> tuple[str | None, str | None]:
 
 
 def _show_stats():
-    """통계 팝업 (로그인 사용자 전용, 현재 로컬 데이터 기반 간단 요약)."""
+    """통계 팝업"""
     uid = auth_manager.get_uid()
     if not uid:
+        def _show_login_warn():
+            root = tk.Tk(); root.withdraw()
+            root.attributes("-topmost", True)
+            messagebox.showwarning("알림", "로그인이 필요한 서비스입니다.", parent=root)
+            root.destroy()
+        threading.Thread(target=_show_login_warn, daemon=True).start()
         return
 
-    user_dir  = _get_user_dir(uid)
-    log_path  = os.path.join(user_dir, "posture_log.jsonl")
+    # 연결 상태 정밀 진단
+    db_status = ""
+    stats = None
+    
+    # FirebaseUploader가 정상적으로 초기화되었는지 확인
+    if not uploader._available:
+        db_status = "DB 연결 실패 (firebase_key.json 파일 없음!)"
+    else:
+        try:
+            doc_ref = uploader.db.collection("day").document(uid)
+            doc = doc_ref.get()
+            if doc.exists:
+                stats = doc.to_dict()
+                db_status = "DB 연결 및 데이터 조회 성공!"
+            else:
+                db_status = "연결 성공 (하지만 day 컬렉션에 데이터가 없음)"
+        except Exception as e:
+            db_status = f"에러 발생: {e}"
 
-    total_secs  = 0
-    turtle_secs = 0
-    count       = 0
+    if stats:
+        total_secs = stats.get("total_seconds", 0)
+        turtle_secs = stats.get("turtle_seconds", 0)
+    else:
+        total_secs = 0
+        turtle_secs = 0
 
-    if os.path.exists(log_path):
-        with open(log_path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    rec = json.loads(line)
-                    total_secs  += rec.get("total_seconds", 0)
-                    turtle_secs += rec.get("turtle_seconds", 0)
-                    count       += 1
-                except json.JSONDecodeError:
-                    continue
-
+    count = total_secs // 60 
     ratio = (turtle_secs / total_secs * 100) if total_secs > 0 else 0
-    msg   = (
+    
+    msg = (
         f"계정: {auth_manager.get_email()}\n"
-        f"기록 수: {count}건\n"
+        f"UID: {uid}\n"
+        f"상태: {db_status}\n"
+        f"---------------------------\n"
+        f"누적 기록: 약 {count}건(분)\n"
         f"총 측정: {total_secs // 60}분\n"
-        f"거북목 비율: {ratio:.1f}%"
+        f"거북목 비율: {ratio:.1f}%\n"
+        f"*(서버 동기화 데이터 기준)*"
     )
 
     def _show():

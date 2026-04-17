@@ -329,11 +329,42 @@ data/.gitkeep : 빈 폴더 git 추적용
 | `src/utils/notifier.py` | OS별 알림 추상화 |
 | `src/utils/firebase_uploader.py` | Firestore 업로드 (부분 완료) |
 
-### 현재 미해결 사항
+### 현재 미해결 사항 (2차 개발 착수 전 기준)
 
-- Firebase 업로드에 **사용자 식별자 없음** → 다중 사용자 데이터 분리 불가
-- **비로그인/로그인 모드 구분 없음** → 트레이 메뉴에 인증 UI 없음
-- **exe 빌드 미검증** → 개발 환경 없이 실행 불가
+> 아래 항목은 2차 개발(1단계·2단계)을 통해 **모두 해결 완료**되었습니다.
+
+| 항목 | 해결 방법 |
+|---|---|
+| Firebase 업로드에 사용자 식별자 없음 | `AuthManager` + `uid` 기반 경로 분리로 해결 |
+| 비로그인/로그인 모드 구분 없음 | `tray_app.py` 메뉴 동적 전환 + `AuthManager` 통합 |
+| exe 빌드 미검증 | `build.bat` 빌드 스크립트 구현 완료 (실행 검증은 4단계) |
+
+---
+
+## 현재 진행 상태 (2026-04-10 기준)
+
+| 단계 | 상태 | 비고 |
+|---|---|---|
+| 1단계: 모드 분리·인증 기반 | ✅ 완료 | 회원가입 기능 추가 구현 포함 |
+| 2단계: 데이터 연동 파이프라인 | ✅ 완료 | 오프라인 큐·uid 분리 동작 확인 |
+| 3단계: 통계 조회 | 🔶 부분 완료 | 로컬 기반 통계 팝업 구현, Firestore 쿼리(`stats.py`) 미구현 |
+| 4단계: exe 배포 | 🔶 진행 중 | `build.bat` 작성 완료, 실제 빌드 검증 필요 |
+| 5단계: 운영 안정화 | ⬜ 미시작 | `app_logger.py` 미구현 |
+
+### 설계 대비 추가 구현된 기능 (미문서화 항목)
+
+| 기능 | 위치 | 설명 |
+|---|---|---|
+| 회원가입 (`signup`) | `src/auth.py`, `turtle_neck.py` | 이메일 중복확인 버튼 포함 회원가입 폼 |
+| `check_email_exists()` | `src/auth.py` | signInWithPassword 프로브 방식 중복 확인 |
+| `_ask_signup_credentials()` | `turtle_neck.py` | 이메일 중복확인 + 비밀번호 일치 검증 tkinter 폼 |
+| `_SIGNUP_ERROR_MAP` | `turtle_neck.py` | Firebase 에러 코드 → 한국어 메시지 매핑 |
+| `flush_with_record()` | `src/logger.py` | flush 결과를 dict로 반환 (업로드 큐 연동용) |
+| `get_all_records(hour_prefix)` | `src/utils/upload_queue.py` | 시간대 필터링으로 done+pending 전체 반환 |
+| `mark_failed()` | `src/utils/upload_queue.py` | 업로드 실패 항목을 failed 상태로 마킹 |
+| `_switch_logger(uid)` | `turtle_neck.py` | 로그인/로그아웃 시 logger·upload_queue 경로 교체 |
+| `_get_user_dir(uid)` | `turtle_neck.py` | uid 유무로 logs 하위 경로 결정 |
+| `_show_stats()` | `turtle_neck.py` | 로컬 JSONL 기반 통계 tkinter 팝업 (3단계 부분 구현) |
 
 ---
 
@@ -368,36 +399,46 @@ data/.gitkeep : 빈 폴더 git 추적용
 
 **목표**: 비로그인 기본 플로우 유지 + 로그인/로그아웃 UI 추가
 
-#### 신규 파일: `src/auth.py`
+#### 신규 파일: `src/auth.py` ✅ 구현 완료
 
 ```python
-# AuthManager 클래스 설계
+# AuthManager 클래스 — 실제 구현 메서드
 class AuthManager:
-    def login(email, password) -> uid | None
+    def login(email, password) -> uid | None      # Firebase Auth REST 로그인
+    def signup(email, password) -> uid | None     # 신규 계정 생성 (설계 추가)
+    def check_email_exists(email) -> bool | None  # 중복 이메일 확인 (설계 추가)
     def logout()
     def get_uid() -> str | None
+    def get_email() -> str | None
     def is_logged_in() -> bool
     def load_session()   # 앱 재시작 후 세션 복원
     def save_session()   # uid, email, 로그인 시각 → logs/session.json
+    # last_error: str | None  — 마지막 에러 코드 보관 (회원가입 에러 전달용)
 ```
 
 세션 저장 경로: `logs/session.json`
 
-#### 수정 파일: `src/tray_app.py`
+#### 수정 파일: `src/tray_app.py` ✅ 구현 완료
 
 - `build_tray()` 에 `auth_manager` 파라미터 추가
-- 로그인 상태에 따라 메뉴 동적 생성
-- 로그인 다이얼로그: `tkinter.simpledialog` 로 이메일/비밀번호 입력
+- 로그인 상태에 따라 메뉴 동적 생성 (`visible` 람다)
+- 비로그인: `캘리브레이션 | 로그인 | 회원가입 | 종료` (회원가입 추가됨)
+- 로그인: `캘리브레이션 | 통계 보기 | 로그아웃 | 종료`
 
-#### 수정 파일: `turtle_neck.py`
+#### 수정 파일: `turtle_neck.py` ✅ 구현 완료
 
 - `AuthManager` 인스턴스 생성 및 앱 시작 시 `load_session()` 호출
-- `on_login()`, `on_logout()` 콜백 구현
+- `on_login()`, `on_logout()`, `on_signup()` 콜백 구현
+- `_ask_credentials()` — tkinter 이메일/비밀번호 입력 다이얼로그
+- `_ask_signup_credentials()` — 이메일 중복확인 버튼 포함 회원가입 전용 폼
+- `_SIGNUP_ERROR_MAP` — Firebase 에러 코드 → 한국어 안내 메시지 매핑
+- `_show_signup_error()` — 회원가입 실패 시 에러 팝업
 
 #### 완료 기준
-- [ ] 로그인 없이 기존 탐지 기능이 그대로 동작
-- [ ] 로그인/로그아웃 전환이 앱 재시작 포함 안정 동작
-- [ ] 트레이 메뉴가 로그인 상태에 따라 올바르게 전환됨
+- [x] 로그인 없이 기존 탐지 기능이 그대로 동작
+- [x] 로그인/로그아웃 전환이 앱 재시작 포함 안정 동작
+- [x] 트레이 메뉴가 로그인 상태에 따라 올바르게 전환됨
+- [x] 회원가입 후 자동 로그인 및 로그 경로 전환 동작 (추가 달성)
 
 ---
 
@@ -430,39 +471,50 @@ users/
             └── uploaded_at
 ```
 
-#### 수정 파일: `src/utils/firebase_uploader.py`
+#### 수정 파일: `src/utils/firebase_uploader.py` ✅ 구현 완료
 
 - `upload_log_file(file_path, uid)` 로 시그니처 변경
 - `uid` 없으면 업로드 스킵 (비로그인 보호)
-- Firestore 경로를 `users/{uid}/posture_logs/{doc_name}` 으로 변경
+- Firestore 경로: `users/{uid}/posture_logs/{YYYY-MM-DD_HH}`
+- Firestore 문서 필드: `total_tracked_seconds`, `total_turtle_seconds`, `bad_posture_count`, `log_data[]`, `uploaded_at`
 
-#### 신규 파일: `src/utils/upload_queue.py`
+#### 신규 파일: `src/utils/upload_queue.py` ✅ 구현 완료
 
 ```python
-# UploadQueue 클래스 설계
+# UploadQueue 클래스 — 실제 구현 메서드
 class UploadQueue:
-    def enqueue(record: dict)
-    def get_pending() -> list[dict]
-    def mark_done(record_ids)
-    def retry_failed()   # 실패 레코드 재시도
+    def enqueue(record: dict)                        # pending 상태로 JSONL에 append
+    def get_pending() -> list[dict]                  # status == "pending" 항목 반환
+    def get_all_records(hour_prefix) -> list[dict]   # done+pending 전체 반환 (설계 추가)
+    def mark_done(entry_ids: list[str])              # 업로드 성공 → done 상태
+    def mark_failed(entry_ids: list[str])            # 업로드 실패 → failed 상태 (설계 추가)
+    def retry_failed()                               # failed → pending 으로 복원 후 재시도
 ```
 
-업로드 실패 시 `upload_queue.jsonl` 에 `status: "pending"` 유지,
-성공 시 `status: "done"` 업데이트 → 앱 재시작 후 pending 자동 재시도
+업로드 실패 시 `upload_queue.jsonl` 에 `status: "failed"` 기록,
+`retry_failed()` 로 `pending` 복원 → 다음 upload_loop 주기에 재시도
 
-#### 수정 파일: `src/logger.py`
+각 항목 구조:
+```json
+{"id": "<uuid>", "status": "pending|done|failed", "queued_at": "<ISO8601>", "record": {<posture record>}}
+```
+
+#### 수정 파일: `src/logger.py` ✅ 구현 완료
 
 - 생성자에 `user_dir: str` 파라미터 추가 (uid 기반 경로 주입)
+- `flush_with_record() -> dict | None` 추가 — flush 결과를 dict로 반환해 upload_queue 연동 (설계 추가)
 
-#### 수정 파일: `turtle_neck.py`
+#### 수정 파일: `turtle_neck.py` ✅ 구현 완료
 
-- `upload_loop()` 에서 `auth_manager.get_uid()` 확인 후 업로드 실행
-- 비로그인이면 `logs/anonymous/` 경로에만 저장, 업로드 스킵
+- `_get_user_dir(uid)` — uid 유무로 `logs/{uid}` 또는 `logs/anonymous` 반환
+- `_switch_logger(uid)` — 로그인/로그아웃 시 logger·upload_queue 경로 교체 및 기존 데이터 flush
+- `upload_loop()` — 60초 간격으로 `auth_manager.get_uid()` 확인 후 pending 업로드 실행
+- 비로그인이면 `logs/anonymous/` 에만 저장, 업로드 스킵
 
 #### 완료 기준
-- [ ] 로그인 사용자 데이터가 `users/{uid}/posture_logs/` 에 저장됨
-- [ ] 비로그인 데이터는 Firebase에 전송되지 않음
-- [ ] 네트워크 단절 후 재연결 시 pending 레코드 자동 재전송 확인
+- [x] 로그인 사용자 데이터가 `users/{uid}/posture_logs/` 에 저장됨
+- [x] 비로그인 데이터는 Firebase에 전송되지 않음
+- [x] 네트워크 단절 후 재연결 시 pending 레코드 자동 재전송 확인 (코드 검증 완료)
 
 ---
 
@@ -478,23 +530,31 @@ class UploadQueue:
 | 주간 평균 비율 | 주 단위 | 최근 7일 일일 비율 평균 |
 | 오늘 거북목 횟수 | 일 단위 | `bad_posture_count` 합계 |
 
-#### 신규 파일: `src/stats.py`
+#### 신규 파일: `src/stats.py` ⬜ 미구현 (Firestore 쿼리 기반)
 
 ```python
+# 다음 스프린트 구현 예정
 class StatsManager:
     def get_daily_summary(uid, date) -> dict
     def get_weekly_summary(uid) -> dict
     def _query_firestore(uid, date_range) -> list[dict]
 ```
 
-#### 수정 파일: `src/tray_app.py`
+#### 부분 구현: `turtle_neck.py` — `_show_stats()` 🔶 로컬 기반으로 선구현
 
-- "통계 보기" 메뉴 클릭 시 `tkinter` 팝업으로 일/주 요약 표시
-- 비로그인 상태에서는 "로그인 후 통계를 확인할 수 있습니다" 메시지
+- 로그인 사용자 전용, `logs/{uid}/posture_log.jsonl` 로컬 파일을 직접 읽어 집계
+- tkinter 팝업으로 `계정 / 기록 수 / 총 측정 시간 / 거북목 비율(%)` 표시
+- Firestore 쿼리(주간 통계) 미구현 — `stats.py` 완성 후 교체 예정
+
+#### 수정 파일: `src/tray_app.py` ✅ 부분 구현
+
+- "통계 보기" 메뉴: 로그인 상태(`is_logged_in()`)일 때만 `visible=True`로 표시
+- 비로그인 상태에서는 메뉴 자체가 숨겨짐 (별도 제한 메시지 없이 항목 비노출)
 
 #### 완료 기준
-- [ ] 로그인 사용자 기준 오늘/이번 주 통계 팝업 표시
-- [ ] 비로그인 상태에서 통계 메뉴는 제한 메시지만 표시
+- [x] 로그인 사용자 기준 오늘 통계 팝업 표시 (로컬 JSONL 기반)
+- [ ] 주간 통계 집계 및 표시 (`stats.py` + Firestore 쿼리) — 다음 스프린트
+- [x] 비로그인 상태에서 통계 메뉴 비노출 (메뉴 항목 자체 숨김 처리)
 
 ---
 
@@ -502,22 +562,34 @@ class StatsManager:
 
 **목표**: PyInstaller 빌드 파이프라인 완성 + 포터블 패키지 배포
 
-#### 빌드 명령
+#### 빌드 명령 (자동화 스크립트: `build.bat`) ✅ 스크립트 구현 완료
 
-```bash
-pyinstaller \
-  --noconsole \
-  --onedir \
-  --name TurtleNeckDetector \
-  --collect-all mediapipe \
-  --hidden-import pystray._win32 \
-  --hidden-import firebase_admin \
-  --add-data "config.json;." \
-  --add-data "firebase_key.json;." \
+`build.bat` 실행 시 아래 명령을 자동 수행합니다:
+
+```bat
+python -m pyinstaller ^
+  --noconsole ^
+  --onedir ^
+  --name TurtleNeckDetector ^
+  --collect-all mediapipe ^
+  --hidden-import pystray._win32 ^
+  --hidden-import firebase_admin ^
+  --hidden-import google.cloud.firestore ^
+  --add-data "config.json;." ^
+  --add-data "firebase_key.json;." ^
   turtle_neck.py
 ```
 
-> `sys.frozen` 분기는 이미 `turtle_neck.py` 에 구현됨 — 유지.
+설계 대비 추가된 옵션:
+- `--hidden-import google.cloud.firestore` — Firestore 클라이언트 명시적 포함
+
+`build.bat` 기능:
+- `.venv` 가상환경 자동 감지 및 활성화
+- PyInstaller 설치 여부 사전 확인
+- 이전 빌드(`dist/TurtleNeckDetector`, `build/turtle_neck`) 자동 정리
+- 빌드 성공/실패 메시지 출력
+
+> `sys.frozen` 분기는 `turtle_neck.py` 에 구현됨 — 유지.
 > 빌드 후 `dist/TurtleNeckDetector/` 에서 직접 실행 검증 필수.
 
 #### 포터블 패키지 구성
@@ -531,7 +603,8 @@ TurtleNeckDetector/
 ```
 
 #### 완료 기준
-- [ ] `python turtle_neck.py` 없이 exe 단독 실행 성공
+- [x] `build.bat` 스크립트 작성 완료 (사전 검증 완료)
+- [ ] `python turtle_neck.py` 없이 exe 단독 실행 성공 — 실행 검증 필요
 - [ ] 신규 PC에서 exe 더블클릭 → 트레이 아이콘 정상 동작 확인
 - [ ] 로그인/로그아웃/캘리브레이션 모두 exe 환경에서 동작
 
@@ -567,15 +640,21 @@ TurtleNeckDetector/
 
 ## 이번 스프린트 범위
 
-### 포함
-- **1단계 전체**: `AuthManager`, 트레이 메뉴 동적 전환, 세션 지속
-- **2단계 기본**: 로그 경로 분리, `FirebaseUploader` uid 연결, `UploadQueue` 기본 구현
-- **4단계 사전 검증**: 개발 PC에서 exe 1회 빌드 성공까지
+### ✅ 완료
+- **1단계 전체**: `AuthManager` (로그인/로그아웃/회원가입), 트레이 메뉴 동적 전환, 세션 지속
+- **2단계 전체**: 로그 경로 분리(`_switch_logger`), `FirebaseUploader` uid 연결, `UploadQueue` 구현
+- **3단계 부분**: 로컬 JSONL 기반 통계 팝업 `_show_stats()` 선구현
+- **4단계 사전**: `build.bat` 빌드 스크립트 작성 완료
 
-### 제외 (다음 스프린트)
-- 통계 시각화 UI (3단계 이후)
-- 자동 업데이트 완성형 배포 (5단계)
+### 🔶 다음 스프린트 우선 과제
+- **3단계 완성**: `src/stats.py` 구현 (Firestore 쿼리 기반 일/주 통계)
+- **4단계 완성**: 실제 exe 빌드 실행 및 신규 환경 검증
+- **5단계**: `src/app_logger.py` 앱 이벤트 로그 (인증 실패·업로드 실패·크래시)
+
+### 제외 (추후 검토)
+- 자동 업데이트 완성형 배포
 - 개인 맞춤 코칭/알림 고도화
+- 주간/월간 통계 대시보드 (웹 또는 앱)
 
 ---
 
