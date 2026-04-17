@@ -328,7 +328,9 @@ def camera_loop():
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         notify("오류", "카메라를 열 수 없습니다.")
-        return
+        return 
+    
+    last_notify_time = 0.0 # 마지막 알림 발송시각
 
     while not stop_event.is_set():
         ok, frame = cap.read()
@@ -343,8 +345,12 @@ def camera_loop():
                 logger.tick(detector.is_turtle)
             if changed:
                 set_tray_state(tray_icon, detector.baseline_score, detector.is_turtle)
-                if detector.is_turtle:
-                    notify("거북목 감지!", "자세를 바로잡아 주세요.")
+                if not detector.is_turtle:
+                    last_notify_time = 0.0  # 정상 복귀 시 타이머 리셋
+
+            if detector.is_turtle and (time.time() - last_notify_time >= 10):
+                notify("거북목 감지!", "자세를 바로잡아 주세요.")
+                last_notify_time = time.time()
 
         now = time.time()
         if detector.baseline_score is not None and now - last_save >= SAVE_INTERVAL:
