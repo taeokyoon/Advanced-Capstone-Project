@@ -1,20 +1,16 @@
-# ── 핵심 비전 및 AI 라이브러리 ──
-opencv-python>=4.8.0
-mediapipe==0.10.9
+# ── Core AI & Computer Vision ────────────────
+opencv-python         # 웹캠 제어 및 이미지 처리
+mediapipe             # AI 자세 추적 (M1 지원 버전)
 
-# ── [중요] Mac/Windows 공통: MediaPipe 버전 충돌 방지용 ──
-protobuf<4
+# ── GUI & Image Processing ──────────────────
+Pillow                # Tkinter 이미지 표시 및 변환
 
-# ── 트레이 아이콘 (GUI) ──
-pystray>=0.19.0
-Pillow>=10.0.0
+# ── System Tray & Background ────────────────
+pystray               # 시스템 트레이 아이콘 관리
 
-# ── Firebase 클라우드 연동 ──
-firebase-admin>=6.5.0
+# ── Backend & Firebase ──────────────────────
+firebase-admin        # 파이어베이스 실시간 DB 및 업로드
+requests              # 인증 및 API 통신용
 
-# ── Firebase Auth REST API 호출 (로그인 기능) ──
-requests>=2.31.0
-
-# ── OS별 알림 라이브러리 분기 처리 ──
-winotify; sys_platform == 'win32'
-plyer>=2.1.0; sys_platform == 'darwin'
+# ── OS Specific (Windows Only) ──────────────
+# winotify            # 윈도우 알림 (Mac에서는 무시됨)

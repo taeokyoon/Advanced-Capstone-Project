@@ -1,18 +1,10 @@
-"""
-turtle_neck.py — 진입점 (Entry Point)
-
-설정 로드 → AuthManager 세션 복원 → 카메라 스레드 → 업로드 스레드 → 트레이 실행
-
-모드 분리:
-  비로그인 → logs/anonymous/  에 저장, Firebase 업로드 없음
-  로그인   → logs/{uid}/      에 저장, Firebase 업로드 활성
-"""
 import cv2
 import json
 import os
 import sys
 import threading
 import time
+import gc
 
 import platform
 import subprocess
@@ -337,13 +329,7 @@ _SIGNUP_ERROR_MAP = {
 }
 
 def _show_signup_error(msg: str):
-    def _run():
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes("-topmost", True)
-        messagebox.showerror("회원가입 실패", msg, parent=root)
-        root.destroy()
-    threading.Thread(target=_run, daemon=True).start()
+    _os_messagebox("회원가입 실패", msg, type="error")
 
 
 def on_signup(icon, item):
@@ -456,9 +442,23 @@ def show_calibration_window():
                   command=do_calibration)
     p_btn.pack(pady=10, fill="x")
     
+    # 💡 [추가] 안전하게 창을 닫고 이미지 메모리를 해제하는 함수
+    def close_window():
+        calibration_done_event.set()
+        
+        # 라벨이 잡고 있는 이미지 참조를 명시적으로 끊어줍니다.
+        if hasattr(img_label, 'imgtk'):
+            img_label.imgtk = None
+        if hasattr(mascot_label, 'image'):
+            mascot_label.image = None
+            
+        root.quit()    # mainloop 안전 종료
+        root.destroy() # 창 파괴
+    
     start_btn = tk.Button(control_frame, text="백그라운드 실행", height=2,
-                          command=lambda: [calibration_done_event.set(), root.destroy()], 
+                          command=close_window, 
                           fg="red", font=("Apple SD Gothic Neo", 13, "bold"))
+    root.protocol("WM_DELETE_WINDOW", close_window)
 
     root.bind('<p>', do_calibration)
     root.bind('<P>', do_calibration)
@@ -539,10 +539,20 @@ def camera_loop():
             if evaluated and detector.baseline_score is not None:
                 with _logger_lock:
                     logger.tick(detector.is_turtle)
+                    
                 if changed:
-                    set_tray_state(tray_icon, detector.baseline_score, detector.is_turtle)
-                    if detector.is_turtle:
-                        notify("거북목 감지!", "자세를 바로잡아 주세요.")
+                    # 💡 [수정] 알림과 트레이 변경이 카메라 프레임을 막지 않도록 
+                    # 별도의 일회용 스레드를 만들어서 실행시킵니다.
+                    def update_ui_async():
+                        try:
+                            set_tray_state(tray_icon, detector.baseline_score, detector.is_turtle)
+                            if detector.is_turtle:
+                                notify("거북목 감지!", "자세를 바로잡아 주세요.")
+                        except Exception as e:
+                            print(f"[UI 업데이트 에러] {e}")
+
+                    # 메인 스레드나 카메라 스레드에 영향을 주지 않는 데몬 스레드 시작
+                    threading.Thread(target=update_ui_async, daemon=True).start()
 
             now = time.time()
             if detector.baseline_score is not None and now - last_save >= SAVE_INTERVAL:
@@ -703,6 +713,9 @@ if __name__ == "__main__":
         calibration_done_event.clear() 
         show_calibration_window()
         
+        # 💡 [핵심 추가] 창이 닫힌 직후 메인 스레드에서 남은 Tkinter 객체 강제 청소!
+        gc.collect()
+
         if stop_event.is_set(): 
             break
 
