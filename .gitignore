@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Build
+dist/
+build/
+*.spec
+
+# Runtime data (자동 생성)
+logs/
+*.jsonl
+posture.db
+
+# IDE
+.vscode/
+*.idea/
+.DS_Store
+
+# Secrets
+firebase_key.json
+.env
