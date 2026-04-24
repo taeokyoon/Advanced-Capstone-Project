@@ -19,5 +19,6 @@ posture.db
 *.idea/
 .DS_Store
 
-# Firebase Secret Key
+# Secrets
 firebase_key.json
+.env

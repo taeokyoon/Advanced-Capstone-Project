@@ -10,9 +10,12 @@ upload_queue.py — 업로드 대기/재시도 큐 (JSONL 기반 영속 저장)
 • failed   : 업로드 실패 (retry_failed() 로 pending 으로 되돌릴 수 있음)
 """
 import json
+import logging
 import os
 import uuid
 from datetime import datetime
+
+log = logging.getLogger(__name__)
 
 
 class UploadQueue:
@@ -22,61 +25,54 @@ class UploadQueue:
 
     # ── 쓰기 ──────────────────────────────────────────────────────────────────
 
-    def enqueue(self, record: dict):
-        """레코드를 pending 상태로 큐 파일에 append."""
+    def enqueue(self, record: dict) -> None:
         entry = {
-            "id": str(uuid.uuid4()),
-            "status": "pending",
+            "id":        str(uuid.uuid4()),
+            "status":    "pending",
             "queued_at": datetime.now().isoformat(),
-            "record": record,
+            "record":    record,
         }
         try:
             with open(self.queue_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
         except Exception as e:
-            print(f"[Queue] enqueue 실패: {e}")
+            log.error("enqueue 실패: %s", e)
 
     # ── 읽기 ──────────────────────────────────────────────────────────────────
 
     def get_pending(self) -> list[dict]:
-        """status == 'pending' 인 항목 목록 반환."""
         return [e for e in self._read_all() if e.get("status") == "pending"]
 
     def get_all_records(self, hour_prefix: str | None = None) -> list[dict]:
-        """done + pending 전체 레코드를 반환.
-
-        hour_prefix: "2026-04-10_11" 형태로 전달하면 해당 시간대 레코드만 반환.
-        None이면 전체 반환.
-        """
-        entries = [e["record"] for e in self._read_all() if e.get("status") in ("done", "pending")]
+        """done + pending 전체 레코드 반환. hour_prefix 지정 시 해당 시간대만."""
+        entries = [
+            e["record"] for e in self._read_all()
+            if e.get("status") in ("done", "pending")
+        ]
         if hour_prefix:
-            # "2026-04-10_11" → "2026-04-10T11" (timestamp 필드 prefix 형식으로 변환)
             ts_prefix = hour_prefix.replace("_", "T")
             entries = [r for r in entries if r.get("timestamp", "").startswith(ts_prefix)]
         return entries
 
     # ── 상태 업데이트 ─────────────────────────────────────────────────────────
 
-    def mark_done(self, entry_ids: list[str]):
-        """지정된 id 들의 status 를 'done' 으로 갱신."""
+    def mark_done(self, entry_ids: list[str]) -> None:
         self._update_status(set(entry_ids), "done")
 
-    def mark_failed(self, entry_ids: list[str]):
-        """지정된 id 들의 status 를 'failed' 로 갱신."""
+    def mark_failed(self, entry_ids: list[str]) -> None:
         self._update_status(set(entry_ids), "failed")
 
-    def retry_failed(self):
-        """'failed' 항목을 'pending' 으로 되돌려 재시도 대상에 포함."""
+    def retry_failed(self) -> None:
         if not os.path.exists(self.queue_path):
             return
         entries = self._read_all()
-        changed = False
+        changed = any(e.get("status") == "failed" for e in entries)
+        if not changed:
+            return
         for e in entries:
             if e.get("status") == "failed":
                 e["status"] = "pending"
-                changed = True
-        if changed:
-            self._write_all(entries)
+        self._write_all(entries)
 
     # ── 내부 헬퍼 ─────────────────────────────────────────────────────────────
 
@@ -95,15 +91,15 @@ class UploadQueue:
                     continue
         return entries
 
-    def _write_all(self, entries: list[dict]):
+    def _write_all(self, entries: list[dict]) -> None:
         try:
             lines = [json.dumps(e, ensure_ascii=False) for e in entries]
             with open(self.queue_path, "w", encoding="utf-8") as f:
                 f.write("\n".join(lines) + ("\n" if lines else ""))
         except Exception as e:
-            print(f"[Queue] 파일 쓰기 실패: {e}")
+            log.error("파일 쓰기 실패: %s", e)
 
-    def _update_status(self, id_set: set[str], new_status: str):
+    def _update_status(self, id_set: set[str], new_status: str) -> None:
         entries = self._read_all()
         changed = False
         for e in entries:

@@ -2,8 +2,11 @@
 logger.py — JSON Lines 형식으로 분 단위 자세 기록 저장
 """
 import json
+import logging
 import os
 from datetime import datetime
+
+log = logging.getLogger(__name__)
 
 
 class PostureLogger:
@@ -18,25 +21,22 @@ class PostureLogger:
 
     def __init__(self, user_dir: str):
         os.makedirs(user_dir, exist_ok=True)
-        self.log_path     = os.path.join(user_dir, "posture_log.jsonl")
-        self.turtle_secs  = 0
-        self.total_secs   = 0
+        self.log_path    = os.path.join(user_dir, "posture_log.jsonl")
+        self.turtle_secs = 0
+        self.total_secs  = 0
 
-    def tick(self, is_turtle: bool):
-        """매 판정 초마다 호출."""
+    def tick(self, is_turtle: bool) -> None:
         self.total_secs += 1
         if is_turtle:
             self.turtle_secs += 1
 
     def flush(self) -> bool:
-        """누적 데이터를 파일에 기록하고 카운터 초기화. 성공 여부 반환."""
         return self.flush_with_record() is not None
 
     def flush_with_record(self) -> dict | None:
         """
         누적 데이터를 파일에 기록하고 카운터 초기화.
         저장된 레코드 dict 반환, 데이터 없거나 실패 시 None.
-        업로드 큐 연동 시 반환값을 enqueue() 에 전달한다.
         """
         if self.total_secs == 0:
             return None
@@ -54,5 +54,5 @@ class PostureLogger:
             self.total_secs  = 0
             return record
         except Exception as e:
-            print(f"[log error] {e}")
+            log.error("로그 기록 실패: %s", e)
             return None
