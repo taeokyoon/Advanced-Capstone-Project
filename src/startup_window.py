@@ -263,7 +263,7 @@ class StartupWindow:
 
     def _build_ui(self):
         self._root = tk.Tk()
-        self._root.title("거북목 요정 AI — 시작")
+        self._root.title("Turtle Check — 시작")
         self._root.resizable(False, False)
         self._root.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -288,7 +288,7 @@ class StartupWindow:
         right = tk.Frame(self._root, padx=20, pady=18)
         right.pack(side="right", fill="both", expand=True)
 
-        tk.Label(right, text="거북목 요정 AI",
+        tk.Label(right, text="Turtle Check",
                  font=("Arial", 14, "bold")).pack(pady=(0, 4))
 
         _load_mascot(right, self.mascot_path, size=120)
@@ -485,7 +485,7 @@ class SettingsWindow:
         else:
             self._root = tk.Tk()
 
-        self._root.title("거북목 요정 AI — 설정")
+        self._root.title("Turtle Check — 설정")
         self._root.resizable(False, False)
         self._root.attributes("-topmost", True)
         self._root.protocol("WM_DELETE_WINDOW", self._close)
@@ -511,7 +511,7 @@ class SettingsWindow:
         right = tk.Frame(self._root, padx=20, pady=14)
         right.pack(side="right", fill="both", expand=True)
 
-        tk.Label(right, text="거북목 요정 AI",
+        tk.Label(right, text="Turtle Check",
                  font=("Arial", 13, "bold")).pack(pady=(0, 2))
 
         _load_mascot(right, self.mascot_path, size=100)
@@ -640,7 +640,7 @@ class AuthWindow:
         frame = tk.Frame(self._root, padx=24, pady=20)
         frame.pack()
 
-        tk.Label(frame, text="거북목 요정 AI",
+        tk.Label(frame, text="Turtle Check",
                  font=("Arial", 13, "bold")).pack(pady=(0, 10))
 
         self._msg = tk.StringVar(value="")
