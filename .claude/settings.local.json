@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p /c/Users/taeok/desktop/combine_test/combined_version/src/utils)",
+      "Bash(mkdir -p /c/Users/taeok/desktop/combine_test/combined_version/assets)",
+      "Bash(mkdir -p /c/Users/taeok/desktop/combine_test/combined_version/logs)",
+      "Bash(cp /c/Users/taeok/desktop/combine_test/Advanced-Capstone-Project_mac/assets/mascot.png /c/Users/taeok/desktop/combine_test/combined_version/assets/)",
+      "Bash(python -c ' *)",
+      "Bash(.venv/Scripts/python.exe *)"
+    ]
+  }
+}

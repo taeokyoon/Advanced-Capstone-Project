@@ -9,6 +9,9 @@ protobuf<4
 pystray>=0.19.0
 Pillow>=10.0.0
 
+# ── 현대적 UI 테마 ──
+customtkinter>=5.2.0
+
 # ── Firebase 클라우드 연동 ──
 firebase-admin>=6.5.0
 
