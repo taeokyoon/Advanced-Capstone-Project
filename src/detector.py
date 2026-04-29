@@ -43,11 +43,28 @@ class PostureDetector:
         NOSE = lms[self._mp_pose.PoseLandmark.NOSE.value]
         LS   = lms[self._mp_pose.PoseLandmark.LEFT_SHOULDER.value]
         RS   = lms[self._mp_pose.PoseLandmark.RIGHT_SHOULDER.value]
-        if min(LS.visibility, RS.visibility) <= _MIN_VISIBILITY:
+        if min(LS.visibility, RS.visibility, NOSE.visibility) <= _MIN_VISIBILITY:
             return None
         sw = abs(LS.x - RS.x)
         if sw <= _MIN_SHOULDER_W:
             return None
+        # 손(손목·손가락)이 얼굴 근처에 있으면 NOSE 추적이 불안정해지므로 스킵
+        _HAND_LMS = [
+            self._mp_pose.PoseLandmark.LEFT_WRIST,
+            self._mp_pose.PoseLandmark.RIGHT_WRIST,
+            self._mp_pose.PoseLandmark.LEFT_INDEX,
+            self._mp_pose.PoseLandmark.RIGHT_INDEX,
+            self._mp_pose.PoseLandmark.LEFT_PINKY,
+            self._mp_pose.PoseLandmark.RIGHT_PINKY,
+            self._mp_pose.PoseLandmark.LEFT_THUMB,
+            self._mp_pose.PoseLandmark.RIGHT_THUMB,
+        ]
+        for lm_id in _HAND_LMS:
+            pt = lms[lm_id.value]
+            if pt.visibility > _MIN_VISIBILITY:
+                dist = ((NOSE.x - pt.x) ** 2 + (NOSE.y - pt.y) ** 2) ** 0.5
+                if dist < 0.20:
+                    return None
         return ((LS.y + RS.y) / 2 - NOSE.y) / sw
 
     def process_frame(self, frame) -> float | None:

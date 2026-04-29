@@ -244,9 +244,11 @@ def camera_loop(app: AppState) -> None:
                     if not app.detector.is_turtle:
                         last_notify_time = 0.0
 
-                if app.detector.is_turtle and (time.time() - last_notify_time >= NOTIFY_COOLDOWN):
-                    notify("거북목 감지!", "자세를 바로잡아 주세요.")
-                    last_notify_time = time.time()
+            if (app.detector.baseline_score is not None
+                    and app.detector.is_turtle
+                    and time.time() - last_notify_time >= NOTIFY_COOLDOWN):
+                notify("거북목 감지!", "자세를 바로잡아 주세요.")
+                last_notify_time = time.time()
 
             now = time.time()
             if app.detector.baseline_score is not None and now - app.last_save >= SAVE_INTERVAL:
