@@ -6,6 +6,7 @@ auth.py — Firebase Auth REST API 기반 사용자 인증 + 세션 관리
 import json
 import logging
 import os
+import time
 from datetime import datetime
 
 import requests
@@ -14,7 +15,7 @@ log = logging.getLogger(__name__)
 
 _SIGN_IN_URL = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword"
 _SIGN_UP_URL = "https://identitytoolkit.googleapis.com/v1/accounts:signUp"
-
+_REFRESH_URL = "https://securetoken.googleapis.com/v1/token" # 토큰 연장 주소 추가
 
 class AuthManager:
     """
@@ -28,6 +29,9 @@ class AuthManager:
         self._uid:   str | None = None
         self._email: str | None = None
         self.last_error: str | None = None
+        self._id_token: str | None = None
+        self._refresh_token: str | None = None
+        self._token_expires_at: float = 0
 
     # ── 세션 유지 ──────────────────────────────────────────────────────────────
 
@@ -90,6 +94,9 @@ class AuthManager:
             body        = resp.json()
             self._uid   = body["localId"]
             self._email = body["email"]
+            self._id_token = body.get("idToken")
+            self._refresh_token = body.get("refreshToken")
+            self._token_expires_at = time.time() + int(body.get("expiresIn", 3600)) - 300
             self.save_session()
             log.info("로그인 성공: %s (%s)", self._email, self._uid)
             return self._uid
@@ -146,6 +153,9 @@ class AuthManager:
             body        = resp.json()
             self._uid   = body["localId"]
             self._email = body["email"]
+            self._id_token = body.get("idToken")
+            self._refresh_token = body.get("refreshToken")
+            self._token_expires_at = time.time() + int(body.get("expiresIn", 3600)) - 300
             self.save_session()
             log.info("회원가입 성공: %s (%s)", self._email, self._uid)
             return self._uid
@@ -174,6 +184,33 @@ class AuthManager:
 
     def is_logged_in(self) -> bool:
         return self._uid is not None
+    
+    
+    def get_valid_token(self) -> str | None:
+        """현재 유효한 ID 토큰을 반환. 만료되었으면 자동으로 갱신합니다."""
+        if not self.is_logged_in() or not self._refresh_token:
+            return None
+            
+        # 토큰 유효기간이 지났다면 갱신 진행
+        if time.time() > self._token_expires_at:
+            try:
+                resp = requests.post(
+                    f"{_REFRESH_URL}?key={self.api_key}",
+                    data={"grant_type": "refresh_token", "refresh_token": self._refresh_token},
+                    timeout=10
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                self._id_token = data.get("id_token")
+                self._refresh_token = data.get("refresh_token")
+                self._token_expires_at = time.time() + int(data.get("expires_in", 3600)) - 300
+                self.save_session()
+                log.info("보안 토큰 자동 갱신 완료")
+            except Exception as e:
+                log.error("보안 토큰 갱신 실패: %s", e)
+                return None
+                
+        return self._id_token
 
     # ── 내부 헬퍼 ─────────────────────────────────────────────────────────────
 

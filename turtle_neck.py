@@ -72,7 +72,10 @@ class AppState:
             api_key=os.environ.get("FIREBASE_API_KEY", cfg.get("firebase_api_key", "")),
         )
         self.detector    = PostureDetector(cfg["delta_turtle"], cfg["delta_ok"])
-        self.uploader    = FirebaseUploader(_FIREBASE_KEY_PATH)
+        self.uploader = FirebaseUploader(
+            auth_manager=self.auth_manager,
+            project_id=cfg.get("firebase_project_id")
+        )
         self.stop_event  = threading.Event()
         self.tray_icon   = None
         self.last_save   = time.time()
