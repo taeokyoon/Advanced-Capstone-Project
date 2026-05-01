@@ -44,7 +44,7 @@ else:
     _BASE = os.path.dirname(os.path.abspath(__file__))
 
 _CONFIG_PATH       = os.path.join(_BASE, "config.json")
-_FIREBASE_KEY_PATH = os.path.join(_BASE, "firebase_key.json")
+# _FIREBASE_KEY_PATH = os.path.join(_BASE, "firebase_key.json")
 _MASCOT_PATH       = os.path.join(_BASE, "assets", "mascot.png")
 
 load_dotenv(os.path.join(_BASE, ".env"))
