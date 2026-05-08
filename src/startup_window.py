@@ -1,7 +1,7 @@
 """
 startup_window.py — 앱 시작 창 + 트레이 로그인 창 + 설정 창 (크로스플랫폼 병합 버전)
 
-크로스플랫폼: customtkinter + PIL.ImageTk (Windows / macOS 공통)
+크로스플랫폼: customtkinter + CTkImage (Windows / macOS 공통)
 
 StartupWindow  : 앱 시작 시 (마스코트 + 카메라 피드 + 로그인 + 캘리브레이션)
 SettingsWindow : 트레이 "설정 화면 열기" 클릭 시 (마스코트 + 인증 + 캘리브레이션 + 카메라)
@@ -14,7 +14,7 @@ import tkinter as tk
 import customtkinter as ctk
 
 import cv2
-from PIL import Image, ImageTk
+from PIL import Image
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -128,10 +128,10 @@ def _load_mascot(parent_frame, mascot_path: str | None, size: int = 130) -> None
     if not mascot_path:
         return
     try:
-        img = Image.open(mascot_path).resize((size, size), Image.Resampling.LANCZOS)
-        photo = ImageTk.PhotoImage(img)
-        lbl = ctk.CTkLabel(parent_frame, image=photo, text="")
-        lbl.image = photo
+        img     = Image.open(mascot_path).resize((size, size), Image.Resampling.LANCZOS)
+        ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(size, size))
+        lbl     = ctk.CTkLabel(parent_frame, image=ctk_img, text="")
+        lbl.image = ctk_img
         lbl.pack(pady=(6, 2))
     except Exception:
         pass
@@ -187,11 +187,14 @@ class StartupWindow:
     def _poll_frame(self):
         try:
             img = self._frame_queue.get_nowait()
-            self._photo = ImageTk.PhotoImage(img)
+            self._photo = ctk.CTkImage(
+                light_image=img, dark_image=img,
+                size=(self._FRAME_W, self._FRAME_H),
+            )
             self._cam_label.configure(image=self._photo)
         except queue.Empty:
             pass
-        if not self._stop_cam.is_set():
+        if not self._stop_cam.is_set() and self._root.winfo_exists():
             self._root.after(self._POLL_MS, self._poll_frame)
 
     # ── 캘리브레이션 ──────────────────────────────────────────────────────────
@@ -205,6 +208,17 @@ class StartupWindow:
         self._root.after(800, self._finish)
 
     def _finish(self):
+        self._stop_cam.set()
+        # destroy() 전에 모든 pending after() 콜백 취소
+        # (customtkinter의 check_dpi_scaling/update 포함)
+        try:
+            for aid in self._root.tk.call('after', 'info'):
+                self._root.after_cancel(aid)
+        except Exception:
+            pass
+        # StringVar를 Tk가 살아있는 동안 메인 스레드에서 해제
+        self._email_var = self._pw_var = self._auth_msg = \
+            self._status_var = self._logged_lbl = None
         self.on_done()
         self._root.destroy()
 
@@ -221,16 +235,24 @@ class StartupWindow:
 
         def _do():
             uid = self.auth_manager.login(email, pw)
+            if self._stop_cam.is_set():
+                return  # 창이 이미 닫힘
             if uid:
                 self.switch_logger(uid)
-                self._root.after(0, lambda: self._auth_msg.set(
-                    f"로그인 성공: {self.auth_manager.get_email()}"
-                ))
-                self._root.after(0, self._update_auth_ui)
+                try:
+                    self._root.after(0, lambda: self._auth_msg and self._auth_msg.set(
+                        f"로그인 성공: {self.auth_manager.get_email()}"
+                    ))
+                    self._root.after(0, self._update_auth_ui)
+                except Exception:
+                    pass
             else:
-                self._root.after(0, lambda: self._auth_msg.set(
-                    "로그인 실패. 이메일/비밀번호를 확인하세요."
-                ))
+                try:
+                    self._root.after(0, lambda: self._auth_msg and self._auth_msg.set(
+                        "로그인 실패. 이메일/비밀번호를 확인하세요."
+                    ))
+                except Exception:
+                    pass
 
         threading.Thread(target=_do, daemon=True).start()
 
@@ -475,7 +497,10 @@ class SettingsWindow:
     def _poll_frame(self):
         try:
             img = self._live_frame_queue.get_nowait()
-            self._photo = ImageTk.PhotoImage(img)
+            self._photo = ctk.CTkImage(
+                light_image=img, dark_image=img,
+                size=(self._FRAME_W, self._FRAME_H),
+            )
             self._cam_label.configure(image=self._photo)
         except queue.Empty:
             pass
