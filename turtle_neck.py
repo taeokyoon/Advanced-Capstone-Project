@@ -5,12 +5,11 @@ import sys
 import threading
 import time
 import gc
-
 import platform
 import subprocess
 
 import tkinter as tk
-from tkinter import simpledialog, messagebox
+from tkinter import simpledialog
 
 from src.auth              import AuthManager
 from src.detector          import PostureDetector
@@ -30,7 +29,6 @@ else:
     _BASE = os.path.dirname(os.path.abspath(__file__))
 
 _CONFIG_PATH       = os.path.join(_BASE, "config.json")
-_FIREBASE_KEY_PATH = os.path.join(_BASE, "firebase_key.json")
 _MASCOT_PATH       = os.path.join(_BASE, "assets", "mascot.png")
 
 with open(_CONFIG_PATH, encoding="utf-8") as f:
@@ -48,7 +46,7 @@ auth_manager = AuthManager(
 )
 
 detector   = PostureDetector(cfg["delta_turtle"], cfg["delta_ok"])
-uploader   = FirebaseUploader(_FIREBASE_KEY_PATH)
+uploader   = FirebaseUploader(auth_manager= auth_manager,project_id=cfg.get("firebase_project_id"))
 stop_event = threading.Event()
 tray_icon  = None
 last_save  = time.time()
