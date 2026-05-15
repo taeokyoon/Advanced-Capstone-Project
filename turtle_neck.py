@@ -1,15 +1,9 @@
 """
-turtle_neck.py — 진입점 (크로스플랫폼 병합 버전)
+turtle_neck.py — 진입점
 
-Windows 아키텍처 베이스 + Mac UX 기능 통합:
-  • AppState 단일 인스턴스로 공유 상태 관리 (Windows)
-  • 마스코트 이미지 표시 (Mac)
-  • 트레이 "설정 화면 열기" → SettingsWindow (Mac + Windows 통합)
-  • 트레이 로그인/로그아웃 직접 지원 (Windows)
-  • 구조화된 로깅 / .env 지원 (Windows)
-  • 크로스플랫폼 알림: winotify(Windows) / plyer(macOS)
+AppState 단일 인스턴스로 공유 상태 관리. 메인 스레드(tkinter) + 백그라운드 스레드
+(camera_loop, upload_loop, pystray) 오케스트레이션.
 
-모드 분리:
   비로그인 → logs/anonymous/  에 저장, Firebase 업로드 없음
   로그인   → logs/{uid}/      에 저장, Firebase 업로드 활성
 """
@@ -43,9 +37,8 @@ if getattr(sys, "frozen", False):
 else:
     _BASE = os.path.dirname(os.path.abspath(__file__))
 
-_CONFIG_PATH       = os.path.join(_BASE, "config.json")
-# _FIREBASE_KEY_PATH = os.path.join(_BASE, "firebase_key.json")
-_MASCOT_PATH       = os.path.join(_BASE, "assets", "mascot.png")
+_CONFIG_PATH  = os.path.join(_BASE, "config.json")
+_MASCOT_PATH  = os.path.join(_BASE, "assets", "mascot.png")
 
 load_dotenv(os.path.join(_BASE, ".env"))
 

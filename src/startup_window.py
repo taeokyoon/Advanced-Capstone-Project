@@ -42,10 +42,6 @@ def _safe_variable_del(self):
 tk.Variable.__del__ = _safe_variable_del
 
 
-# ── 공유: 회원가입 CTkToplevel 다이얼로그 ────────────────────────────────────────
-
-
-
 # ── 공유: 마스코트 이미지 로드 헬퍼 ──────────────────────────────────────────
 
 def _load_mascot(parent_frame, mascot_path: str | None, size: int = 130) -> None:
@@ -60,6 +56,41 @@ def _load_mascot(parent_frame, mascot_path: str | None, size: int = 130) -> None
         lbl.pack(pady=(6, 2))
     except Exception:
         pass
+
+
+# ── 공유: 인증 UI 빌더 ───────────────────────────────────────────────────────
+
+def _build_auth_section(parent, google_cmd, logout_cmd) -> tuple:
+    """비로그인·로그인 전환 프레임 쌍 생성. (login_frame, logged_frame, logged_lbl) 반환."""
+    login_frame = ctk.CTkFrame(parent, fg_color="transparent")
+    ctk.CTkButton(
+        login_frame, text="G 구글계정으로 시작", width=200,
+        fg_color="#db4437", hover_color="#c23321", text_color="white",
+        font=ctk.CTkFont(weight="bold"),
+        command=google_cmd,
+    ).pack(pady=15)
+
+    logged_frame = ctk.CTkFrame(parent, fg_color="transparent")
+    logged_lbl   = tk.StringVar()
+    ctk.CTkLabel(logged_frame, textvariable=logged_lbl, text_color="#4caf50").pack(pady=6)
+    ctk.CTkButton(
+        logged_frame, text="로그아웃", width=90,
+        fg_color="transparent", border_width=1,
+        command=logout_cmd,
+    ).pack()
+
+    return login_frame, logged_frame, logged_lbl
+
+
+def _refresh_auth_ui(auth_manager, login_frame, logged_frame, logged_lbl) -> None:
+    """auth_manager 상태에 따라 비로그인·로그인 프레임을 전환."""
+    if auth_manager.is_logged_in():
+        login_frame.pack_forget()
+        logged_frame.pack(fill="x", pady=4)
+        logged_lbl.set(f"로그인: {auth_manager.get_email()}")
+    else:
+        logged_frame.pack_forget()
+        login_frame.pack(fill="x", pady=4)
 
 
 # ── StartupWindow ─────────────────────────────────────────────────────────────
@@ -172,25 +203,10 @@ class StartupWindow:
         self._auth_msg.set("로그아웃되었습니다.")
         self._update_auth_ui()
 
-    def _on_logout(self):
-        self.auth_manager.logout()
-        self.switch_logger(None)
-        self._auth_msg.set("로그아웃되었습니다.")
-        self._update_auth_ui()
-
-    # ── 회원가입 ──────────────────────────────────────────────────────────────
-
-
     # ── 인증 상태 UI 전환 ─────────────────────────────────────────────────────
 
     def _update_auth_ui(self):
-        if self.auth_manager.is_logged_in():
-            self._login_frame.pack_forget()
-            self._logged_frame.pack(fill="x", pady=4)
-            self._logged_lbl.set(f"로그인: {self.auth_manager.get_email()}")
-        else:
-            self._logged_frame.pack_forget()
-            self._login_frame.pack(fill="x", pady=4)
+        _refresh_auth_ui(self.auth_manager, self._login_frame, self._logged_frame, self._logged_lbl)
 
     # ── UI 빌드 ───────────────────────────────────────────────────────────────
 
@@ -230,24 +246,9 @@ class StartupWindow:
         ctk.CTkLabel(right, textvariable=self._auth_msg,
                      text_color="gray", wraplength=230).pack(pady=(4, 0))
 
-        # 비로그인 폼
-        self._login_frame = ctk.CTkFrame(right, fg_color="transparent")
-        
-        google_btn = ctk.CTkButton(self._login_frame, text="G 구글계정으로 시작", width=188,
-            fg_color="#db4437", hover_color="#c23321", text_color="white",
-            font=ctk.CTkFont(weight="bold"),
-            command=self._on_google_login)
-        google_btn.pack(pady=15)
-
-        # 로그인 완료 상태
-        self._logged_frame = ctk.CTkFrame(right, fg_color="transparent")
-        self._logged_lbl   = tk.StringVar()
-        ctk.CTkLabel(self._logged_frame, textvariable=self._logged_lbl,
-                     text_color="#4caf50").pack(pady=6)
-        ctk.CTkButton(self._logged_frame, text="로그아웃", width=90,
-                      fg_color="transparent", border_width=1,
-                      command=self._on_logout).pack()
-
+        self._login_frame, self._logged_frame, self._logged_lbl = _build_auth_section(
+            right, self._on_google_login, self._on_logout
+        )
         self._update_auth_ui()
 
         ctk.CTkFrame(right, height=2, fg_color=("gray70", "gray30")).pack(fill="x", pady=10)
@@ -372,13 +373,7 @@ class SettingsWindow:
             self._on_auth_change()
 
     def _update_auth_ui(self):
-        if self.auth_manager.is_logged_in():
-            self._login_frame.pack_forget()
-            self._logged_frame.pack(fill="x", pady=4)
-            self._logged_lbl.set(f"로그인: {self.auth_manager.get_email()}")
-        else:
-            self._logged_frame.pack_forget()
-            self._login_frame.pack(fill="x", pady=4)
+        _refresh_auth_ui(self.auth_manager, self._login_frame, self._logged_frame, self._logged_lbl)
 
     # ── 프레임 폴링 ───────────────────────────────────────────────────────────
 
@@ -438,23 +433,9 @@ class SettingsWindow:
         ctk.CTkLabel(right, textvariable=self._auth_msg,
                      text_color="gray", wraplength=230).pack(pady=(4, 0))
 
-        # 비로그인 폼
-        self._login_frame = ctk.CTkFrame(right, fg_color="transparent")
-        google_btn = ctk.CTkButton(self._login_frame, text="G 구글계정으로 시작", width=188,
-            fg_color="#db4437", hover_color="#c23321", text_color="white",
-            font=ctk.CTkFont(weight="bold"),
-            command=self._on_google_login)
-        google_btn.pack(pady=15)
-
-        # 로그인 완료 상태
-        self._logged_frame = ctk.CTkFrame(right, fg_color="transparent")
-        self._logged_lbl   = tk.StringVar()
-        ctk.CTkLabel(self._logged_frame, textvariable=self._logged_lbl,
-                     text_color="#4caf50").pack(pady=4)
-        ctk.CTkButton(self._logged_frame, text="로그아웃", width=85,
-                      fg_color="transparent", border_width=1,
-                      command=self._on_logout).pack()
-
+        self._login_frame, self._logged_frame, self._logged_lbl = _build_auth_section(
+            right, self._on_google_login, self._on_logout
+        )
         self._update_auth_ui()
 
         ctk.CTkFrame(right, height=2, fg_color=("gray70", "gray30")).pack(fill="x", pady=10)
@@ -505,8 +486,6 @@ class AuthWindow:
         self._build_ui()
 
     def _close(self, uid=None):
-        self._email_var = None
-        self._pw_var = None
         self._msg = None
         self._root.destroy()
         if self._on_complete:

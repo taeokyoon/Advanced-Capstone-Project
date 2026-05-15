@@ -241,15 +241,15 @@ TurtleNeckDetector/
 
 ### `src/auth.py` — 인증
 
-Firebase Auth REST API 기반. 모든 메서드는 예외를 외부로 던지지 않습니다.
+Firebase Auth REST API 기반 Google OAuth 로그인. 모든 메서드는 예외를 외부로 던지지 않습니다.
 
 | 메서드 | 설명 |
 |---|---|
-| `login(email, password)` | 로그인 → uid 반환 (실패 시 None) |
-| `signup(email, password)` | 신규 계정 생성 → uid 반환 |
-| `check_email_exists(email)` | `True`=사용 중 / `False`=사용 가능 / `None`=확인 불가 |
+| `login_with_google(client_secret_path)` | Google OAuth → uid 반환 (실패 시 None) |
 | `logout()` | 세션 파일 삭제 + 상태 초기화 |
 | `load_session()` / `save_session()` | `logs/session.json` 세션 영속화 |
+| `get_valid_token()` | 유효한 ID 토큰 반환 (만료 시 자동 갱신) |
+| `get_uid()` / `get_email()` / `is_logged_in()` | 상태 조회 |
 
 ---
 
@@ -449,12 +449,12 @@ TurtleNeckDetector/
 
 | 단계 | 상태 | 비고 |
 |---|---|---|
-| 1단계: 모드 분리·인증 | ✅ 완료 | AuthManager, 회원가입, 세션 지속 |
+| 1단계: 모드 분리·인증 | ✅ 완료 | AuthManager, Google OAuth, 세션 지속 |
 | 2단계: 데이터 연동 파이프라인 | ✅ 완료 | uid 경로 분리, UploadQueue, Firestore 업로드 |
 | 3단계: 통계 조회 | 🔶 부분 완료 | 로컬 JSONL 기반 팝업 구현, Firestore 쿼리 미구현 |
 | 4단계: exe 배포 | 🔶 진행 중 | PyInstaller 명령 확보, build.bat 미작성, 신규 환경 실행 검증 필요 |
 | 5단계: 운영 안정화 | ✅ 완료 | logging 모듈 도입 (log_config.py), app.log 자동 기록 |
-| 리팩토링 | ✅ 완료 | AppState 캡슐화, 시크릿 .env 분리, 상수 추출, 버그 수정 |
+| 리팩토링 | ✅ 완료 | AppState 캡슐화, 시크릿 .env 분리, 상수 추출, UI 공통 위젯 추출, 버그 수정 |
 
 ### 리팩토링에서 해결된 항목
 
@@ -468,6 +468,9 @@ TurtleNeckDetector/
 | `firebase_uploader.py` datetime 버그 | `datetime.now()` → `datetime.datetime.now()` 수정 |
 | Linux 알림 미처리 | `notifier.py`에 fallback 경고 로그 추가 |
 | 타입 힌트 누락 | 전체 모듈 함수 시그니처 통일 |
+| `StartupWindow._on_logout` 중복 정의 | 중복 메서드 제거 |
+| `AuthWindow._close` 존재하지 않는 변수 참조 | 죽은 변수 할당 제거 |
+| `StartupWindow`·`SettingsWindow` 인증 UI 중복 | `_build_auth_section` / `_refresh_auth_ui` 공통 헬퍼로 추출 |
 
 ---
 
@@ -480,7 +483,6 @@ TurtleNeckDetector/
 
 ### 우선순위 중간
 
-- **`startup_window.py` 리팩토링**: `StartupWindow`·`AuthWindow` 중복 로그인 폼 공통 위젯으로 추출
 - **`PostureDetector` 스레드 안전성**: `StartupWindow` 카메라 스레드와 메인 스레드 동시 접근 가능성 해소
 
 ### 추후 검토

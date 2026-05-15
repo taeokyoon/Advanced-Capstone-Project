@@ -13,8 +13,8 @@ import requests
 
 log = logging.getLogger(__name__)
 
-_REFRESH_URL = "https://securetoken.googleapis.com/v1/token" # 토큰 연장 주소 추가
 _SIGN_IN_IDP_URL = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp"
+_REFRESH_URL     = "https://securetoken.googleapis.com/v1/token"
 class AuthManager:
     """
     이메일/비밀번호 로그인 + 로컬 세션 파일 기반 재시작 후 세션 복원.
@@ -100,12 +100,10 @@ class AuthManager:
             return None
 
         try:
-            #인터넷 브라우저를 띄워 구글 로그인 진행
             flow = InstalledAppFlow.from_client_secrets_file(
                 client_secret_path,
                 scopes=['openid', 'https://www.googleapis.com/auth/userinfo.email']
             )
-            #로컬 서버를 열고 인증 결과를 기다립니다.
             credentials = flow.run_local_server(port=0, prompt='consent')
             google_id_token = credentials.id_token
 
@@ -113,7 +111,6 @@ class AuthManager:
                 self.last_error = "구글 ID 토큰을 받지 못했습니다."
                 return None
 
-            #받아온 구글 토큰을 파이어베이스 서버에 제출하여 최종 로그인
             payload = {
                 "postBody": f"id_token={google_id_token}&providerId=google.com",
                 "requestUri": "http://localhost",
@@ -129,7 +126,6 @@ class AuthManager:
             resp.raise_for_status()
             body = resp.json()
 
-            #파이어베이스 인증 정보 저장
             self._uid = body["localId"]
             self._email = body["email"]
             self._id_token = body.get("idToken")
@@ -169,7 +165,6 @@ class AuthManager:
         if not self.is_logged_in() or not self._refresh_token:
             return None
             
-        # 토큰 유효기간이 지났다면 갱신 진행
         if time.time() > self._token_expires_at:
             try:
                 resp = requests.post(
