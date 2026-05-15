@@ -6,7 +6,7 @@
 
 ```bash
 # 가상환경 venv 설치
-py -3.11 venv .venv
+py -3.11 -m venv .venv
 .venv/scripts/activate
 
 # 필요 라이브러리 설치
