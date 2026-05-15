@@ -5,7 +5,14 @@
 ## 빠른 시작
 
 ```bash
+# 가상환경 venv 설치
+py -3.11 venv .venv
+.venv/scripts/activate
+
+# 필요 라이브러리 설치
 pip install -r requirements.txt
+
+# 실행
 python turtle_neck.py
 ```
 
