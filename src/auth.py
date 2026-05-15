@@ -13,10 +13,8 @@ import requests
 
 log = logging.getLogger(__name__)
 
-_SIGN_IN_URL = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword"
-_SIGN_UP_URL = "https://identitytoolkit.googleapis.com/v1/accounts:signUp"
 _REFRESH_URL = "https://securetoken.googleapis.com/v1/token" # 토큰 연장 주소 추가
-
+_SIGN_IN_IDP_URL = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp"
 class AuthManager:
     """
     이메일/비밀번호 로그인 + 로컬 세션 파일 기반 재시작 후 세션 복원.
@@ -46,6 +44,9 @@ class AuthManager:
                 return False
             self._uid   = uid
             self._email = data.get("email")
+            self._id_token = data.get("id_token")
+            self._refresh_token = data.get("refresh_token")
+            self._token_expires_at = data.get("token_expires_at", 0)
             log.info("세션 복원: %s (%s)", self._email, self._uid)
             return True
         except Exception as e:
@@ -58,6 +59,9 @@ class AuthManager:
             data = {
                 "uid":          self._uid,
                 "email":        self._email,
+                "id_token":     self._id_token,
+                "refresh_token": self._refresh_token,
+                "token_expires_at": self._token_expires_at,
                 "logged_in_at": datetime.now().isoformat(),
             }
             with open(self.session_path, "w", encoding="utf-8") as f:
@@ -68,6 +72,9 @@ class AuthManager:
     def _clear_session(self) -> None:
         self._uid   = None
         self._email = None
+        self._id_token = None
+        self._refresh_token = None
+        self._token_expires_at = 0
         if os.path.exists(self.session_path):
             try:
                 os.remove(self.session_path)
@@ -75,98 +82,69 @@ class AuthManager:
                 pass
 
     # ── 인증 ──────────────────────────────────────────────────────────────────
-
-    def login(self, email: str, password: str) -> str | None:
+        
+    def login_with_google(self, client_secret_path: str = "client_secret.json") -> str | None:
         if not self.api_key:
             log.warning("firebase_api_key 가 설정되지 않았습니다.")
             return None
-        if not email or not password:
-            return None
-        self._uid   = None
-        self._email = None
+
         try:
+            # 방금 pip install로 설치한 구글 라이브러리를 불러옵니다.
+            from google_auth_oauthlib.flow import InstalledAppFlow
+        except ImportError:
+            self.last_error = "구글 로그인 라이브러리가 설치되지 않았습니다. pip install google-auth-oauthlib 를 실행해주세요."
+            return None
+
+        if not os.path.exists(client_secret_path):
+            self.last_error = f"{client_secret_path} 파일이 앱 폴더에 없습니다!"
+            return None
+
+        try:
+            #인터넷 브라우저를 띄워 구글 로그인 진행
+            flow = InstalledAppFlow.from_client_secrets_file(
+                client_secret_path,
+                scopes=['openid', 'https://www.googleapis.com/auth/userinfo.email']
+            )
+            #로컬 서버를 열고 인증 결과를 기다립니다.
+            credentials = flow.run_local_server(port=0, prompt='consent')
+            google_id_token = credentials.id_token
+
+            if not google_id_token:
+                self.last_error = "구글 ID 토큰을 받지 못했습니다."
+                return None
+
+            #받아온 구글 토큰을 파이어베이스 서버에 제출하여 최종 로그인
+            payload = {
+                "postBody": f"id_token={google_id_token}&providerId=google.com",
+                "requestUri": "http://localhost",
+                "returnIdpCredential": True,
+                "returnSecureToken": True
+            }
+
             resp = requests.post(
-                f"{_SIGN_IN_URL}?key={self.api_key}",
-                json={"email": email, "password": password, "returnSecureToken": True},
-                timeout=10,
+                f"{_SIGN_IN_IDP_URL}?key={self.api_key}",
+                json=payload,
+                timeout=15
             )
             resp.raise_for_status()
-            body        = resp.json()
-            self._uid   = body["localId"]
+            body = resp.json()
+
+            #파이어베이스 인증 정보 저장
+            self._uid = body["localId"]
             self._email = body["email"]
             self._id_token = body.get("idToken")
             self._refresh_token = body.get("refreshToken")
             self._token_expires_at = time.time() + int(body.get("expiresIn", 3600)) - 300
-            self.save_session()
-            log.info("로그인 성공: %s (%s)", self._email, self._uid)
-            return self._uid
-        except requests.exceptions.HTTPError as e:
-            reason = self._extract_firebase_error(e)
-            log.warning("로그인 실패: %s", reason)
-            return None
-        except requests.exceptions.RequestException as e:
-            log.warning("네트워크 오류: %s", e)
-            return None
 
-    def check_email_exists(self, email: str) -> bool | None:
-        """
-        True=이미 사용 중, False=사용 가능, None=확인 불가.
-        Firebase 이메일 열거 보호가 꺼져 있어야 정확히 동작.
-        """
-        if not self.api_key or not email:
-            return None
-        try:
-            resp = requests.post(
-                f"{_SIGN_IN_URL}?key={self.api_key}",
-                json={"email": email, "password": "__probe__", "returnSecureToken": False},
-                timeout=10,
-            )
-            resp.raise_for_status()
-            return True
-        except requests.exceptions.HTTPError as e:
-            reason = self._extract_firebase_error(e)
-            log.debug("이메일 확인: %s", reason)
-            if "INVALID_PASSWORD" in reason or "INVALID_LOGIN_CREDENTIALS" in reason:
-                return True
-            if "EMAIL_NOT_FOUND" in reason or "INVALID_EMAIL" in reason:
-                return False
-            self.last_error = reason
-            return None
-        except requests.exceptions.RequestException as e:
-            self.last_error = f"NETWORK: {e}"
-            log.warning("이메일 확인 네트워크 오류: %s", e)
-            return None
-
-    def signup(self, email: str, password: str) -> str | None:
-        if not self.api_key:
-            log.warning("firebase_api_key 가 설정되지 않았습니다.")
-            return None
-        if not email or not password:
-            return None
-        try:
-            resp = requests.post(
-                f"{_SIGN_UP_URL}?key={self.api_key}",
-                json={"email": email, "password": password, "returnSecureToken": True},
-                timeout=10,
-            )
-            resp.raise_for_status()
-            body        = resp.json()
-            self._uid   = body["localId"]
-            self._email = body["email"]
-            self._id_token = body.get("idToken")
-            self._refresh_token = body.get("refreshToken")
-            self._token_expires_at = time.time() + int(body.get("expiresIn", 3600)) - 300
             self.save_session()
-            log.info("회원가입 성공: %s (%s)", self._email, self._uid)
+            log.info("구글 로그인 성공: %s (%s)", self._email, self._uid)
             return self._uid
+
         except requests.exceptions.HTTPError as e:
-            reason = self._extract_firebase_error(e)
-            self.last_error = reason
-            log.warning("회원가입 실패: %s", reason)
+            self.last_error = self._extract_firebase_error(e)
             return None
-        except requests.exceptions.RequestException as e:
-            self.last_error = "NETWORK_ERROR"
-            log.warning("네트워크 오류: %s", e)
+        except Exception as e:
+            self.last_error = str(e)
             return None
 
     def logout(self) -> None:

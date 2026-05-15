@@ -19,106 +19,31 @@ from PIL import Image
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
+# destroy() 전 after 콜백 일괄 취소 — customtkinter 내부 콜백 포함
+def _cancel_all_after(root):
+    try:
+        for after_id in root.tk.call('after', 'info'):
+            try:
+                root.after_cancel(after_id)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+# StringVar.__del__을 스레드 안전하게 패치
+# CTkLabel(textvariable=) 연결 시 순환 참조 발생 → CPython 주기적 GC가
+# 백그라운드 스레드에서 __del__을 호출하면 RuntimeError가 발생하므로 억제
+_orig_variable_del = tk.Variable.__del__
+def _safe_variable_del(self):
+    try:
+        _orig_variable_del(self)
+    except RuntimeError:
+        pass
+tk.Variable.__del__ = _safe_variable_del
+
 
 # ── 공유: 회원가입 CTkToplevel 다이얼로그 ────────────────────────────────────────
 
-def _open_signup_dialog(parent, auth_manager, on_success):
-    """
-    회원가입 다이얼로그.
-    on_success(uid) — 가입 성공 시 호출.
-    StartupWindow / SettingsWindow / AuthWindow 에서 공용으로 사용.
-    """
-    dlg = ctk.CTkToplevel(parent)
-    dlg.title("회원가입")
-    dlg.resizable(False, False)
-    dlg.attributes("-topmost", True)
-    dlg.grab_set()
-
-    ctk.CTkLabel(dlg, text="이메일:").grid(row=0, column=0, padx=10, pady=10, sticky="e")
-    email_var = tk.StringVar()
-    ctk.CTkEntry(dlg, textvariable=email_var, width=180).grid(row=0, column=1, padx=4, pady=10)
-
-    email_ok   = {"value": False}
-    status_lbl = ctk.CTkLabel(dlg, text="", width=230, anchor="w")
-    status_lbl.grid(row=1, column=0, columnspan=3, padx=10)
-
-    def on_check():
-        email = email_var.get().strip()
-        if not email:
-            status_lbl.configure(text="이메일을 입력해주세요.", text_color="red")
-            return
-        status_lbl.configure(text="확인 중...", text_color="gray")
-        dlg.update()
-
-        def _chk():
-            exists = auth_manager.check_email_exists(email)
-            if exists is None:
-                err = auth_manager.last_error or "UNKNOWN"
-                dlg.after(0, lambda: status_lbl.configure(text=f"오류: {err}", text_color="orange"))
-                email_ok["value"] = True
-            elif exists:
-                dlg.after(0, lambda: status_lbl.configure(
-                    text="이미 사용 중인 이메일입니다.", text_color="red"
-                ))
-                email_ok["value"] = False
-            else:
-                dlg.after(0, lambda: status_lbl.configure(
-                    text="사용 가능한 이메일입니다.", text_color="#4caf50"
-                ))
-                email_ok["value"] = True
-            dlg.after(
-                0,
-                lambda: submit_btn.configure(
-                    state="normal" if email_ok["value"] else "disabled"
-                ),
-            )
-
-        threading.Thread(target=_chk, daemon=True).start()
-
-    ctk.CTkButton(dlg, text="중복확인", width=80, command=on_check).grid(
-        row=0, column=2, padx=6, pady=10)
-
-    ctk.CTkLabel(dlg, text="비밀번호:").grid(row=2, column=0, padx=10, pady=6, sticky="e")
-    pw_var = tk.StringVar()
-    ctk.CTkEntry(dlg, textvariable=pw_var, show="*", width=180).grid(row=2, column=1, padx=4)
-
-    ctk.CTkLabel(dlg, text="비밀번호 확인:").grid(row=3, column=0, padx=10, pady=6, sticky="e")
-    pw2_var = tk.StringVar()
-    ctk.CTkEntry(dlg, textvariable=pw2_var, show="*", width=180).grid(row=3, column=1, padx=4)
-
-    pw_status_lbl = ctk.CTkLabel(dlg, text="", text_color="red", width=230, anchor="w")
-    pw_status_lbl.grid(row=4, column=0, columnspan=3, padx=10)
-
-    def on_submit():
-        if not email_ok["value"]:
-            status_lbl.configure(text="이메일 중복확인을 먼저 해주세요.", text_color="red")
-            return
-        pw  = pw_var.get()
-        pw2 = pw2_var.get()
-        if not pw:
-            pw_status_lbl.configure(text="비밀번호를 입력해주세요.")
-            return
-        if pw != pw2:
-            pw_status_lbl.configure(text="비밀번호가 일치하지 않습니다.")
-            return
-
-        def _sg():
-            uid = auth_manager.signup(email_var.get().strip(), pw)
-            if uid:
-                dlg.after(0, dlg.destroy)
-                dlg.after(0, lambda: on_success(uid))
-            else:
-                err = auth_manager.last_error or "알 수 없는 오류"
-                dlg.after(0, lambda: pw_status_lbl.configure(text=f"실패: {err}"))
-
-        threading.Thread(target=_sg, daemon=True).start()
-
-    submit_btn = ctk.CTkButton(dlg, text="가입", width=80, command=on_submit, state="disabled")
-    submit_btn.grid(row=5, column=1, pady=10, sticky="e")
-    ctk.CTkButton(dlg, text="취소", width=80,
-                  fg_color="transparent", border_width=1,
-                  command=dlg.destroy).grid(row=5, column=2, padx=6, pady=10)
-    dlg.protocol("WM_DELETE_WINDOW", dlg.destroy)
 
 
 # ── 공유: 마스코트 이미지 로드 헬퍼 ──────────────────────────────────────────
@@ -195,7 +120,7 @@ class StartupWindow:
         except queue.Empty:
             pass
         if not self._stop_cam.is_set() and self._root.winfo_exists():
-            self._root.after(self._POLL_MS, self._poll_frame)
+            self._poll_id = self._root.after(self._POLL_MS, self._poll_frame)
 
     # ── 캘리브레이션 ──────────────────────────────────────────────────────────
 
@@ -208,53 +133,44 @@ class StartupWindow:
         self._root.after(800, self._finish)
 
     def _finish(self):
+        self._auth_msg = None
         self._stop_cam.set()
-        # destroy() 전에 모든 pending after() 콜백 취소
-        # (customtkinter의 check_dpi_scaling/update 포함)
-        try:
-            for aid in self._root.tk.call('after', 'info'):
-                self._root.after_cancel(aid)
-        except Exception:
-            pass
-        # StringVar를 Tk가 살아있는 동안 메인 스레드에서 해제
-        self._email_var = self._pw_var = self._auth_msg = \
-            self._status_var = self._logged_lbl = None
+        _cancel_all_after(self._root)
         self.on_done()
-        self._root.destroy()
+        self._root.withdraw()  # destroy 대신 숨김 — 트레이 모드가 같은 CTk 루트를 재사용
+        self._root.quit()      # mainloop 종료
 
     # ── 로그인 / 로그아웃 ─────────────────────────────────────────────────────
 
-    def _on_login(self):
-        email = self._email_var.get().strip()
-        pw    = self._pw_var.get()
-        if not email or not pw:
-            self._auth_msg.set("이메일과 비밀번호를 입력하세요.")
-            return
-        self._auth_msg.set("로그인 중...")
+
+    def _on_google_login(self):
+        self._auth_msg.set("인터넷 브라우저에서 구글 로그인을 진행해주세요...")
         self._root.update()
 
         def _do():
-            uid = self.auth_manager.login(email, pw)
-            if self._stop_cam.is_set():
-                return  # 창이 이미 닫힘
+            uid = self.auth_manager.login_with_google()
+            if self._stop_cam.is_set() or not self._root.winfo_exists():
+                return
             if uid:
                 self.switch_logger(uid)
                 try:
-                    self._root.after(0, lambda: self._auth_msg and self._auth_msg.set(
-                        f"로그인 성공: {self.auth_manager.get_email()}"
-                    ))
+                    self._root.after(0, lambda: self._auth_msg.set(f"구글 로그인 성공: {self.auth_manager.get_email()}"))
                     self._root.after(0, self._update_auth_ui)
                 except Exception:
                     pass
             else:
+                err = self.auth_manager.last_error or "알 수 없는 오류"
                 try:
-                    self._root.after(0, lambda: self._auth_msg and self._auth_msg.set(
-                        "로그인 실패. 이메일/비밀번호를 확인하세요."
-                    ))
+                    self._root.after(0, lambda: self._auth_msg.set(f"구글 로그인 실패: {err}"))
                 except Exception:
                     pass
-
         threading.Thread(target=_do, daemon=True).start()
+
+    def _on_logout(self):
+        self.auth_manager.logout()
+        self.switch_logger(None)
+        self._auth_msg.set("로그아웃되었습니다.")
+        self._update_auth_ui()
 
     def _on_logout(self):
         self.auth_manager.logout()
@@ -264,13 +180,6 @@ class StartupWindow:
 
     # ── 회원가입 ──────────────────────────────────────────────────────────────
 
-    def _on_signup(self):
-        def _success(uid):
-            self.switch_logger(uid)
-            self._auth_msg.set(f"회원가입 성공: {self.auth_manager.get_email()}")
-            self._update_auth_ui()
-
-        _open_signup_dialog(self._root, self.auth_manager, _success)
 
     # ── 인증 상태 UI 전환 ─────────────────────────────────────────────────────
 
@@ -323,20 +232,12 @@ class StartupWindow:
 
         # 비로그인 폼
         self._login_frame = ctk.CTkFrame(right, fg_color="transparent")
-        ctk.CTkLabel(self._login_frame, text="이메일").grid(row=0, column=0, sticky="e", pady=5)
-        self._email_var = tk.StringVar()
-        ctk.CTkEntry(self._login_frame, textvariable=self._email_var, width=160).grid(
-            row=0, column=1, padx=8)
-        ctk.CTkLabel(self._login_frame, text="비밀번호").grid(row=1, column=0, sticky="e", pady=5)
-        self._pw_var = tk.StringVar()
-        ctk.CTkEntry(self._login_frame, textvariable=self._pw_var, show="*", width=160).grid(
-            row=1, column=1, padx=8)
-        btn_row = ctk.CTkFrame(self._login_frame, fg_color="transparent")
-        btn_row.grid(row=2, column=0, columnspan=2, pady=8)
-        ctk.CTkButton(btn_row, text="로그인", width=90,
-                      command=self._on_login).pack(side="left", padx=4)
-        ctk.CTkButton(btn_row, text="회원가입", width=90,
-                      command=self._on_signup).pack(side="left", padx=4)
+        
+        google_btn = ctk.CTkButton(self._login_frame, text="G 구글계정으로 시작", width=188,
+            fg_color="#db4437", hover_color="#c23321", text_color="white",
+            font=ctk.CTkFont(weight="bold"),
+            command=self._on_google_login)
+        google_btn.pack(pady=15)
 
         # 로그인 완료 상태
         self._logged_frame = ctk.CTkFrame(right, fg_color="transparent")
@@ -372,16 +273,18 @@ class StartupWindow:
 
     def _on_close(self):
         self._stop_cam.set()
+        _cancel_all_after(self._root)
         self._root.destroy()
 
     def run(self):
         self._build_ui()
         self._cam_ref = threading.Thread(target=self._cam_thread, daemon=True)
         self._cam_ref.start()
-        self._root.after(self._POLL_MS, self._poll_frame)
+        self._poll_id = self._root.after(self._POLL_MS, self._poll_frame)
         self._root.mainloop()
         self._stop_cam.set()
         self._cam_ref.join(timeout=2.0)
+        return self._root  # 트레이 모드에서 CTk 루트 재사용
 
 
 # ── SettingsWindow ────────────────────────────────────────────────────────────
@@ -418,11 +321,17 @@ class SettingsWindow:
     def show_in_main_thread(self):
         """메인 tkinter 스레드에서 직접 호출. 비주얼 모드 활성 후 창 열기."""
         self._start_visual()
-        self._build_ui()
+        try:
+            self._build_ui()
+        except Exception:
+            self._stop_visual()
+            raise
 
     def _close(self):
         self._stop_visual()
+        self._auth_msg = None
         if self._root and self._root.winfo_exists():
+            _cancel_all_after(self._root)
             self._root.destroy()
 
     # ── 캘리브레이션 ──────────────────────────────────────────────────────────
@@ -436,33 +345,22 @@ class SettingsWindow:
 
     # ── 인증 ──────────────────────────────────────────────────────────────────
 
-    def _on_login(self):
-        email = self._email_var.get().strip()
-        pw    = self._pw_var.get()
-        if not email or not pw:
-            self._auth_msg.set("이메일과 비밀번호를 입력하세요.")
-            return
-        self._auth_msg.set("로그인 중...")
-        if self._root:
-            self._root.update()
-
+        
+    def _on_google_login(self):
+        self._auth_msg.set("인터넷 브라우저에서 구글 로그인을 진행해주세요...")
+        if self._root: self._root.update()
+        
         def _do():
-            uid = self.auth_manager.login(email, pw)
+            uid = self.auth_manager.login_with_google()
             if uid:
                 self.switch_logger(uid)
                 if self._root:
-                    self._root.after(0, lambda: self._auth_msg.set(
-                        f"로그인 성공: {self.auth_manager.get_email()}"
-                    ))
+                    self._root.after(0, lambda: self._auth_msg.set(f"구글 로그인 성공: {self.auth_manager.get_email()}"))
                     self._root.after(0, self._update_auth_ui)
-                if self._on_auth_change:
-                    self._on_auth_change()
+                if self._on_auth_change: self._on_auth_change()
             else:
-                if self._root:
-                    self._root.after(0, lambda: self._auth_msg.set(
-                        "로그인 실패. 이메일/비밀번호를 확인하세요."
-                    ))
-
+                err = self.auth_manager.last_error or "알 수 없는 오류"
+                if self._root: self._root.after(0, lambda: self._auth_msg.set(f"구글 로그인 실패: {err}"))
         threading.Thread(target=_do, daemon=True).start()
 
     def _on_logout(self):
@@ -472,16 +370,6 @@ class SettingsWindow:
         self._update_auth_ui()
         if self._on_auth_change:
             self._on_auth_change()
-
-    def _on_signup(self):
-        def _success(uid):
-            self.switch_logger(uid)
-            self._auth_msg.set(f"회원가입 성공: {self.auth_manager.get_email()}")
-            self._update_auth_ui()
-            if self._on_auth_change:
-                self._on_auth_change()
-
-        _open_signup_dialog(self._root, self.auth_manager, _success)
 
     def _update_auth_ui(self):
         if self.auth_manager.is_logged_in():
@@ -505,14 +393,13 @@ class SettingsWindow:
         except queue.Empty:
             pass
         if self._root and self._root.winfo_exists():
-            self._root.after(self._POLL_MS, self._poll_frame)
+            self._poll_id = self._root.after(self._POLL_MS, self._poll_frame)
 
     # ── UI 빌드 ───────────────────────────────────────────────────────────────
 
     def _build_ui(self):
         if self._parent is not None:
             self._root = ctk.CTkToplevel(self._parent)
-            self._root.grab_set()
         else:
             self._root = ctk.CTk()
 
@@ -553,20 +440,11 @@ class SettingsWindow:
 
         # 비로그인 폼
         self._login_frame = ctk.CTkFrame(right, fg_color="transparent")
-        ctk.CTkLabel(self._login_frame, text="이메일").grid(row=0, column=0, sticky="e", pady=4)
-        self._email_var = tk.StringVar()
-        ctk.CTkEntry(self._login_frame, textvariable=self._email_var, width=145).grid(
-            row=0, column=1, padx=6)
-        ctk.CTkLabel(self._login_frame, text="비밀번호").grid(row=1, column=0, sticky="e", pady=4)
-        self._pw_var = tk.StringVar()
-        ctk.CTkEntry(self._login_frame, textvariable=self._pw_var, show="*", width=145).grid(
-            row=1, column=1, padx=6)
-        btn_row = ctk.CTkFrame(self._login_frame, fg_color="transparent")
-        btn_row.grid(row=2, column=0, columnspan=2, pady=6)
-        ctk.CTkButton(btn_row, text="로그인", width=85,
-                      command=self._on_login).pack(side="left", padx=3)
-        ctk.CTkButton(btn_row, text="회원가입", width=85,
-                      command=self._on_signup).pack(side="left", padx=3)
+        google_btn = ctk.CTkButton(self._login_frame, text="G 구글계정으로 시작", width=188,
+            fg_color="#db4437", hover_color="#c23321", text_color="white",
+            font=ctk.CTkFont(weight="bold"),
+            command=self._on_google_login)
+        google_btn.pack(pady=15)
 
         # 로그인 완료 상태
         self._logged_frame = ctk.CTkFrame(right, fg_color="transparent")
@@ -602,7 +480,7 @@ class SettingsWindow:
                       hover_color=("gray70", "gray30"),
                       command=self._close).pack(pady=2)
 
-        self._root.after(self._POLL_MS, self._poll_frame)
+        self._poll_id = self._root.after(self._POLL_MS, self._poll_frame)
 
 
 # ── AuthWindow ────────────────────────────────────────────────────────────────
@@ -627,39 +505,29 @@ class AuthWindow:
         self._build_ui()
 
     def _close(self, uid=None):
+        self._email_var = None
+        self._pw_var = None
+        self._msg = None
         self._root.destroy()
         if self._on_complete:
             self._on_complete(uid)
 
-    def _on_login(self):
-        email = self._email_var.get().strip()
-        pw    = self._pw_var.get()
-        if not email or not pw:
-            self._msg.set("이메일과 비밀번호를 입력하세요.")
-            return
-        self._msg.set("로그인 중...")
+    def _on_google_login(self):
+        self._msg.set("인터넷 브라우저에서 구글 로그인을 진행해주세요...")
         self._root.update()
-
+        
         def _do():
-            uid = self.auth_manager.login(email, pw)
+            uid = self.auth_manager.login_with_google()
             if uid:
                 self._root.after(0, lambda: self._close(uid))
             else:
-                self._root.after(0, lambda: self._msg.set(
-                    "로그인 실패. 이메일/비밀번호를 확인하세요."
-                ))
-
+                err = self.auth_manager.last_error or "알 수 없는 오류"
+                self._root.after(0, lambda: self._msg.set(f"구글 로그인 실패: {err}"))
         threading.Thread(target=_do, daemon=True).start()
-
-    def _on_signup(self):
-        def _success(uid):
-            self._close(uid)
-        _open_signup_dialog(self._root, self.auth_manager, _success)
 
     def _build_ui(self):
         if self._parent is not None:
             self._root = ctk.CTkToplevel(self._parent)
-            self._root.grab_set()
         else:
             self._root = ctk.CTk()
 
@@ -686,25 +554,12 @@ class AuthWindow:
 
         form = ctk.CTkFrame(frame, fg_color="transparent")
         form.pack(pady=10)
-
-        ctk.CTkLabel(form, text="이메일").grid(row=0, column=0, sticky="e", pady=6)
-        self._email_var = tk.StringVar()
-        ctk.CTkEntry(form, textvariable=self._email_var, width=180).grid(
-            row=0, column=1, padx=10)
-
-        ctk.CTkLabel(form, text="비밀번호").grid(row=1, column=0, sticky="e", pady=6)
-        self._pw_var = tk.StringVar()
-        ctk.CTkEntry(form, textvariable=self._pw_var, show="*", width=180).grid(
-            row=1, column=1, padx=10)
-
-        ctk.CTkFrame(frame, height=2, fg_color=("gray70", "gray30")).pack(fill="x", pady=10)
-
-        btn_row = ctk.CTkFrame(frame, fg_color="transparent")
-        btn_row.pack()
-        ctk.CTkButton(btn_row, text="로그인", width=100,
-                      command=self._on_login).pack(side="left", padx=6)
-        ctk.CTkButton(btn_row, text="회원가입", width=100,
-                      command=self._on_signup).pack(side="left", padx=6)
+        
+        google_btn = ctk.CTkButton(frame, text="G 구글계정으로 시작", width=212,
+            fg_color="#db4437", hover_color="#c23321", text_color="white",
+            font=ctk.CTkFont(weight="bold"),
+            command=self._on_google_login)
+        google_btn.pack(pady=(0, 10))
 
         ctk.CTkButton(frame, text="취소",
                       fg_color="transparent", text_color="gray",

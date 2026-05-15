@@ -1,6 +1,7 @@
 # ── 핵심 비전 및 AI 라이브러리 ──
 opencv-python>=4.8.0
 mediapipe==0.10.9
+mediapipe-model-maker
 
 # ── [중요] Mac/Windows 공통: MediaPipe 버전 충돌 방지용 ──
 protobuf<4
@@ -24,3 +25,9 @@ python-dotenv>=1.0.0
 # ── OS별 알림 라이브러리 분기 처리 ──
 winotify; sys_platform == 'win32'
 plyer>=2.1.0; sys_platform == 'darwin'
+
+# google 로그인
+google-auth-oauthlib
+
+# 뎁스 추정 모델
+depth_anything_v2

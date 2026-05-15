@@ -307,13 +307,13 @@ if __name__ == "__main__":
 
     # Phase 1: 시작 창 (마스코트 + 카메라 피드 + 로그인/캘리브레이션)
     startup_done = threading.Event()
-    StartupWindow(
+    _startup_root = StartupWindow(
         detector=app.detector,
         auth_manager=app.auth_manager,
         on_done=startup_done.set,
         switch_logger=app.switch_logger,
         mascot_path=_MASCOT_PATH,
-    ).run()
+    ).run()  # CTk 루트 반환 (withdraw 상태)
 
     if not startup_done.is_set():
         raise SystemExit(0)
@@ -332,13 +332,17 @@ if __name__ == "__main__":
     notify("백그라운드 모드", "트레이 아이콘 → '설정 화면 열기'에서 언제든 재설정할 수 있습니다.")
 
     # 메인 스레드: 팝업 전용 tkinter 이벤트 루프
-    app.tk_root = tk.Tk()
-    app.tk_root.withdraw()
+    # StartupWindow의 CTk 루트를 재사용 — 새 Tk() 생성 시 stale Tcl 콜백 문제 방지
+    app.tk_root = _startup_root
 
     def _poll() -> None:
         try:
             while True:
-                app.tk_queue.get_nowait()()
+                cb = app.tk_queue.get_nowait()
+                try:
+                    cb()
+                except Exception:
+                    log.exception("tk_queue 콜백 오류")
         except queue.Empty:
             pass
         if not app.stop_event.is_set():
