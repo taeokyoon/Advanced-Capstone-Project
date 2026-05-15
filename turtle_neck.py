@@ -218,7 +218,7 @@ def camera_loop(app: AppState) -> None:
                 score, rgb = app.detector.process_frame_visual(frame)
                 try:
                     app.frame_queue.put_nowait(
-                        Image.fromarray(rgb).resize((420, 315), Image.BILINEAR)
+                        Image.fromarray(rgb).resize((520, 390), Image.BILINEAR)
                     )
                 except queue.Full:
                     pass

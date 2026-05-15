@@ -1,10 +1,10 @@
 """
-startup_window.py — 앱 시작 창 + 트레이 로그인 창 + 설정 창 (크로스플랫폼 병합 버전)
+startup_window.py — 앱 시작 창 + 트레이 로그인 창 + 설정 창
 
 크로스플랫폼: customtkinter + CTkImage (Windows / macOS 공통)
 
-StartupWindow  : 앱 시작 시 (마스코트 + 카메라 피드 + 로그인 + 캘리브레이션)
-SettingsWindow : 트레이 "설정 화면 열기" 클릭 시 (마스코트 + 인증 + 캘리브레이션 + 카메라)
+StartupWindow  : 앱 시작 시 (카메라 피드 + 로그인 + 캘리브레이션)
+SettingsWindow : 트레이 "설정 화면 열기" 클릭 시
 AuthWindow     : 트레이 "로그인" 클릭 시 (컴팩트 폼)
 """
 import platform
@@ -14,12 +14,35 @@ import tkinter as tk
 import customtkinter as ctk
 
 import cv2
-from PIL import Image
+from PIL import Image, ImageDraw
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
-# destroy() 전 after 콜백 일괄 취소 — customtkinter 내부 콜백 포함
+# ── 디자인 토큰 ───────────────────────────────────────────────────────────────
+_BG       = "#0a0a0a"   # 윈도우 배경
+_BG_CAM   = "#050505"   # 카메라 패널 배경
+_SURF     = "#111111"   # 카드·버튼 표면
+_BORDER   = "#1e1e1e"   # 테두리
+_ACCENT   = "#22c55e"   # 초록 액센트
+_ACCENT_H = "#16a34a"   # 초록 호버
+_TEXT_HI  = "#e5e7eb"   # 주 텍스트
+_TEXT_MID = "#374151"   # 보조 텍스트
+_TEXT_DIM = "#252525"   # 희미한 텍스트
+_YELLOW   = "#facc15"   # 대기 상태
+
+# StringVar.__del__ 스레드 안전 패치 ──────────────────────────────────────────
+_orig_variable_del = tk.Variable.__del__
+def _safe_variable_del(self):
+    try:
+        _orig_variable_del(self)
+    except RuntimeError:
+        pass
+tk.Variable.__del__ = _safe_variable_del
+
+
+# ── 공유 헬퍼 ─────────────────────────────────────────────────────────────────
+
 def _cancel_all_after(root):
     try:
         for after_id in root.tk.call('after', 'info'):
@@ -30,22 +53,36 @@ def _cancel_all_after(root):
     except Exception:
         pass
 
-# StringVar.__del__을 스레드 안전하게 패치
-# CTkLabel(textvariable=) 연결 시 순환 참조 발생 → CPython 주기적 GC가
-# 백그라운드 스레드에서 __del__을 호출하면 RuntimeError가 발생하므로 억제
-_orig_variable_del = tk.Variable.__del__
-def _safe_variable_del(self):
-    try:
-        _orig_variable_del(self)
-    except RuntimeError:
-        pass
-tk.Variable.__del__ = _safe_variable_del
+
+def _make_google_icon(size: int = 18) -> Image.Image:
+    """Google G 로고를 PIL Image로 생성 (4× 슈퍼샘플링 안티에일리어스)."""
+    scale = 4
+    s     = size * scale
+    img   = Image.new("RGBA", (s, s), (0, 0, 0, 0))
+    d     = ImageDraw.Draw(img)
+    pad   = scale
+    outer = [pad, pad, s - pad, s - pad]
+    ir    = int(s * 0.30)
+    c     = s // 2
+    inner = [c - ir, c - ir, c + ir, c + ir]
+    # 4색 파이 슬라이스 (PIL: 0°=동/오른쪽, 시계방향)
+    d.pieslice(outer,  -30,  90, fill="#4285F4")   # 파랑: 오른쪽
+    d.pieslice(outer,   90, 165, fill="#34A853")   # 초록: 아래오른쪽
+    d.pieslice(outer,  165, 207, fill="#FBBC05")   # 노랑: 아래왼쪽
+    d.pieslice(outer,  207, 330, fill="#EA4335")   # 빨강: 위
+    d.ellipse(inner, fill=(0, 0, 0, 0))
+    bh = int(s * 0.10)
+    d.rectangle([c - pad, c - bh, s - pad, c + bh], fill="#4285F4")
+    return img.resize((size, size), Image.LANCZOS)
 
 
-# ── 공유: 마스코트 이미지 로드 헬퍼 ──────────────────────────────────────────
+_GOOGLE_ICON_IMG = _make_google_icon(18)
+
+# 설정 창 싱글톤 — 동시에 두 개가 열리지 않도록 추적
+_active_settings_window: "SettingsWindow | None" = None
+
 
 def _load_mascot(parent_frame, mascot_path: str | None, size: int = 130) -> None:
-    """마스코트 이미지를 parent_frame 에 붙인다. 실패 시 조용히 무시."""
     if not mascot_path:
         return
     try:
@@ -58,24 +95,50 @@ def _load_mascot(parent_frame, mascot_path: str | None, size: int = 130) -> None
         pass
 
 
+def _hsep(parent) -> None:
+    """1px 수평 구분선."""
+    tk.Frame(parent, height=1, bg="#141414").pack(fill="x")
+
+
 # ── 공유: 인증 UI 빌더 ───────────────────────────────────────────────────────
 
 def _build_auth_section(parent, google_cmd, logout_cmd) -> tuple:
     """비로그인·로그인 전환 프레임 쌍 생성. (login_frame, logged_frame, logged_lbl) 반환."""
+    google_icon = ctk.CTkImage(
+        light_image=_GOOGLE_ICON_IMG,
+        dark_image=_GOOGLE_ICON_IMG,
+        size=(16, 16),
+    )
     login_frame = ctk.CTkFrame(parent, fg_color="transparent")
     ctk.CTkButton(
-        login_frame, text="G 구글계정으로 시작", width=200,
-        fg_color="#db4437", hover_color="#c23321", text_color="white",
-        font=ctk.CTkFont(weight="bold"),
+        login_frame,
+        text="구글 계정으로 시작",
+        image=google_icon,
+        compound="left",
+        anchor="w",
+        width=190,
+        height=36,
+        fg_color=_SURF,
+        border_color=_BORDER,
+        border_width=1,
+        corner_radius=10,
+        text_color="#6b7280",
+        hover_color="#161616",
+        font=ctk.CTkFont(size=10),
         command=google_cmd,
-    ).pack(pady=15)
+    ).pack(pady=(0, 4))
 
     logged_frame = ctk.CTkFrame(parent, fg_color="transparent")
     logged_lbl   = tk.StringVar()
-    ctk.CTkLabel(logged_frame, textvariable=logged_lbl, text_color="#4caf50").pack(pady=6)
+    ctk.CTkLabel(
+        logged_frame, textvariable=logged_lbl,
+        text_color=_ACCENT, font=ctk.CTkFont(size=9),
+    ).pack(pady=(2, 4))
     ctk.CTkButton(
-        logged_frame, text="로그아웃", width=90,
-        fg_color="transparent", border_width=1,
+        logged_frame, text="로그아웃", width=80,
+        fg_color="transparent", border_color=_BORDER, border_width=1,
+        text_color="#6b7280", hover_color=_SURF, corner_radius=8,
+        font=ctk.CTkFont(size=9),
         command=logout_cmd,
     ).pack()
 
@@ -87,23 +150,44 @@ def _refresh_auth_ui(auth_manager, login_frame, logged_frame, logged_lbl) -> Non
     if auth_manager.is_logged_in():
         login_frame.pack_forget()
         logged_frame.pack(fill="x", pady=4)
-        logged_lbl.set(f"로그인: {auth_manager.get_email()}")
+        logged_lbl.set(f"✓  {auth_manager.get_email()}")
     else:
         logged_frame.pack_forget()
         login_frame.pack(fill="x", pady=4)
 
 
+# ── 공유: 캘리브레이션 베이스라인 카드 ──────────────────────────────────────────
+
+def _build_baseline_card(parent) -> tuple:
+    """(card_frame, val_label, progress_bar) 반환."""
+    card = ctk.CTkFrame(
+        parent, fg_color="#0d0d0d",
+        border_color="#181818", border_width=1, corner_radius=8,
+    )
+    row = ctk.CTkFrame(card, fg_color="transparent")
+    row.pack(fill="x", padx=10, pady=(7, 3))
+    ctk.CTkLabel(row, text="BASELINE",
+                 font=ctk.CTkFont(size=7), text_color=_TEXT_DIM).pack(side="left")
+    val_lbl = ctk.CTkLabel(row, text="—",
+                            font=ctk.CTkFont(size=7), text_color=_TEXT_DIM)
+    val_lbl.pack(side="right")
+    bar = ctk.CTkProgressBar(
+        card, height=3, corner_radius=2,
+        fg_color="#151515", progress_color=_ACCENT,
+    )
+    bar.set(0)
+    bar.pack(fill="x", padx=10, pady=(0, 7))
+    return card, val_lbl, bar
+
+
 # ── StartupWindow ─────────────────────────────────────────────────────────────
 
 class StartupWindow:
-    """
-    앱 시작 시 표시되는 창.
-    좌측: MediaPipe 랜드마크 오버레이 카메라 피드
-    우측: 마스코트 + 로그인/회원가입 폼 + 캘리브레이션 버튼
-    """
+    """앱 시작 시 표시되는 창. 좌: 카메라 피드, 우: 로그인 + 캘리브레이션."""
 
-    _FRAME_W = 420
-    _FRAME_H = 315
+    _FRAME_W = 520
+    _FRAME_H = 390
+    _PANEL_W = 224
     _POLL_MS = 33
 
     def __init__(self, detector, auth_manager, on_done, switch_logger,
@@ -158,9 +242,12 @@ class StartupWindow:
     def _on_calibrate(self):
         baseline = self.detector.calibrate()
         if baseline is None:
-            self._status_var.set("자세가 감지되지 않았습니다. 잠시 후 다시 시도하세요.")
+            self._auth_msg.set("자세가 감지되지 않았습니다. 잠시 후 다시 시도하세요.")
             return
-        self._status_var.set(f"캘리브레이션 완료!  기준값: {baseline:.3f}")
+        self._baseline_val.configure(text=f"{baseline:.3f}", text_color=_ACCENT)
+        self._baseline_bar.set(min(abs(baseline) / 0.8, 1.0))
+        self._badge_dot.configure(fg_color=_ACCENT)
+        self._badge_lbl.configure(text="ACTIVE", text_color=_ACCENT)
         self._root.after(800, self._finish)
 
     def _finish(self):
@@ -168,14 +255,13 @@ class StartupWindow:
         self._stop_cam.set()
         _cancel_all_after(self._root)
         self.on_done()
-        self._root.withdraw()  # destroy 대신 숨김 — 트레이 모드가 같은 CTk 루트를 재사용
-        self._root.quit()      # mainloop 종료
+        self._root.withdraw()
+        self._root.quit()
 
     # ── 로그인 / 로그아웃 ─────────────────────────────────────────────────────
 
-
     def _on_google_login(self):
-        self._auth_msg.set("인터넷 브라우저에서 구글 로그인을 진행해주세요...")
+        self._auth_msg.set("브라우저에서 구글 로그인을 진행해주세요...")
         self._root.update()
 
         def _do():
@@ -185,14 +271,14 @@ class StartupWindow:
             if uid:
                 self.switch_logger(uid)
                 try:
-                    self._root.after(0, lambda: self._auth_msg.set(f"구글 로그인 성공: {self.auth_manager.get_email()}"))
+                    self._root.after(0, lambda: self._auth_msg.set("로그인 완료"))
                     self._root.after(0, self._update_auth_ui)
                 except Exception:
                     pass
             else:
                 err = self.auth_manager.last_error or "알 수 없는 오류"
                 try:
-                    self._root.after(0, lambda: self._auth_msg.set(f"구글 로그인 실패: {err}"))
+                    self._root.after(0, lambda: self._auth_msg.set(f"로그인 실패: {err}"))
                 except Exception:
                     pass
         threading.Thread(target=_do, daemon=True).start()
@@ -212,8 +298,9 @@ class StartupWindow:
 
     def _build_ui(self):
         self._root = ctk.CTk()
-        self._root.title("Turtle Check — 시작")
+        self._root.title("Turtle Check")
         self._root.resizable(False, False)
+        self._root.configure(fg_color=_BG)
         self._root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         if platform.system() == "Darwin":
@@ -222,55 +309,132 @@ class StartupWindow:
             except Exception:
                 pass
 
-        # 좌측: 카메라 피드
-        left = ctk.CTkFrame(self._root, fg_color="black", corner_radius=0)
-        left.pack(side="left")
+        # ── 좌측: 카메라 패널 ─────────────────────────────────────────────
+        left = ctk.CTkFrame(self._root, fg_color=_BG_CAM, corner_radius=0)
+        left.pack(side="left", fill="y")
 
-        self._cam_label = ctk.CTkLabel(left, text="", width=self._FRAME_W, height=self._FRAME_H)
-        self._cam_label.pack()
+        cam_wrap = ctk.CTkFrame(
+            left, fg_color="#0d0d0d",
+            border_color="#1c1c1c", border_width=1, corner_radius=14,
+            width=self._FRAME_W, height=self._FRAME_H,
+        )
+        cam_wrap.pack(padx=14, pady=(14, 10))
+        cam_wrap.pack_propagate(False)
 
-        ctk.CTkLabel(left, text="● MediaPipe 자세 감지 중",
-                     fg_color="transparent", text_color="#00e676",
-                     font=ctk.CTkFont(size=11)).pack(pady=6)
+        self._cam_label = ctk.CTkLabel(
+            cam_wrap, text="", width=self._FRAME_W, height=self._FRAME_H,
+        )
+        self._cam_label.place(relx=0.5, rely=0.5, anchor="center")
 
-        # 우측: 마스코트 + 인증 + 캘리브레이션
-        right = ctk.CTkFrame(self._root, fg_color="transparent", corner_radius=0)
-        right.pack(side="right", fill="both", expand=True, padx=20, pady=18)
+        # MEDIAPIPE ACTIVE 상태 필
+        pill = ctk.CTkFrame(
+            left, fg_color=_SURF, corner_radius=20,
+            border_color=_BORDER, border_width=1,
+        )
+        pill.pack(pady=(0, 14))
+        self._cam_dot = ctk.CTkFrame(
+            pill, width=7, height=7, corner_radius=4, fg_color=_ACCENT,
+        )
+        self._cam_dot.pack_propagate(False)
+        self._cam_dot.pack(side="left", padx=(10, 5), pady=7)
+        ctk.CTkLabel(
+            pill, text="MEDIAPIPE ACTIVE",
+            font=ctk.CTkFont(size=9), text_color="#3d4d3d",
+        ).pack(side="left", padx=(0, 10), pady=7)
 
-        ctk.CTkLabel(right, text="Turtle Check",
-                     font=ctk.CTkFont(size=14, weight="bold")).pack(pady=(0, 4))
+        # 세로 구분선
+        tk.Frame(self._root, width=1, bg="#141414").pack(side="left", fill="y")
 
-        _load_mascot(right, self.mascot_path, size=120)
+        # ── 우측: 컨트롤 패널 ─────────────────────────────────────────────
+        right = ctk.CTkFrame(self._root, fg_color=_BG, corner_radius=0, width=self._PANEL_W)
+        right.pack(side="right", fill="y")
+        right.pack_propagate(False)
+
+        inner = ctk.CTkFrame(right, fg_color="transparent")
+        inner.pack(fill="both", expand=True, padx=16, pady=18)
+
+        # 앱 제목
+        ctk.CTkLabel(
+            inner, text="TURTLE CHECK",
+            font=ctk.CTkFont(size=13, weight="bold"), text_color=_TEXT_HI,
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            inner, text="POSTURE MONITOR",
+            font=ctk.CTkFont(size=7), text_color=_TEXT_DIM,
+        ).pack(anchor="w", pady=(1, 10))
+        _hsep(inner)
+
+        # 상태 뱃지 (STANDBY)
+        badge_f = ctk.CTkFrame(
+            inner, fg_color=_SURF, corner_radius=20,
+            border_color=_BORDER, border_width=1,
+        )
+        badge_f.pack(anchor="w", pady=(8, 8))
+        self._badge_dot = ctk.CTkFrame(badge_f, width=6, height=6, corner_radius=3, fg_color=_YELLOW)
+        self._badge_dot.pack_propagate(False)
+        self._badge_dot.pack(side="left", padx=(8, 4), pady=5)
+        self._badge_lbl = ctk.CTkLabel(
+            badge_f, text="STANDBY",
+            font=ctk.CTkFont(size=8), text_color=_YELLOW,
+        )
+        self._badge_lbl.pack(side="left", padx=(0, 8), pady=5)
+
+        # ACCOUNT 섹션
+        ctk.CTkLabel(
+            inner, text="ACCOUNT",
+            font=ctk.CTkFont(size=7), text_color=_TEXT_DIM,
+        ).pack(anchor="w", pady=(0, 3))
 
         self._auth_msg = tk.StringVar(value="")
-        ctk.CTkLabel(right, textvariable=self._auth_msg,
-                     text_color="gray", wraplength=230).pack(pady=(4, 0))
+        ctk.CTkLabel(
+            inner, textvariable=self._auth_msg,
+            font=ctk.CTkFont(size=8), text_color="#4b5563", wraplength=190,
+        ).pack(anchor="w", pady=(0, 2))
 
         self._login_frame, self._logged_frame, self._logged_lbl = _build_auth_section(
-            right, self._on_google_login, self._on_logout
+            inner, self._on_google_login, self._on_logout,
         )
         self._update_auth_ui()
 
-        ctk.CTkFrame(right, height=2, fg_color=("gray70", "gray30")).pack(fill="x", pady=10)
+        ctk.CTkButton(
+            inner, text="비로그인으로 계속",
+            fg_color="transparent", text_color=_TEXT_DIM,
+            hover_color=_SURF, corner_radius=8,
+            font=ctk.CTkFont(size=8), height=26, width=190,
+            command=self._finish,
+        ).pack(anchor="w", pady=(2, 6))
 
-        ctk.CTkLabel(right, text="바른 자세로 앉은 후\n캘리브레이션을 시작하세요.",
-                     justify="center").pack()
+        # CALIBRATION 섹션 구분선
+        div = ctk.CTkFrame(inner, fg_color="transparent")
+        div.pack(fill="x", pady=(0, 6))
+        tk.Frame(div, height=1, bg="#141414").pack(side="left", fill="x", expand=True, pady=6)
+        ctk.CTkLabel(
+            div, text="  CALIBRATION  ",
+            font=ctk.CTkFont(size=7), text_color="#1a1a1a",
+        ).pack(side="left")
+        tk.Frame(div, height=1, bg="#141414").pack(side="left", fill="x", expand=True, pady=6)
 
-        self._status_var = tk.StringVar(value="")
-        ctk.CTkLabel(right, textvariable=self._status_var,
-                     text_color="#5c9fe8", wraplength=230).pack(pady=4)
+        ctk.CTkLabel(
+            inner, text="바른 자세로 앉은 후\n버튼을 눌러주세요.",
+            font=ctk.CTkFont(size=8), text_color=_TEXT_MID, justify="left",
+        ).pack(anchor="w", pady=(0, 4))
 
-        ctk.CTkButton(right, text="캘리브레이션 시작 (P)",
-                      font=ctk.CTkFont(size=13, weight="bold"), width=200,
-                      command=self._on_calibrate).pack(pady=4)
+        # 베이스라인 카드
+        baseline_card, self._baseline_val, self._baseline_bar = _build_baseline_card(inner)
+        baseline_card.pack(fill="x", pady=(0, 8))
+
+        # 캘리브레이션 버튼
+        ctk.CTkButton(
+            inner, text="캘리브레이션 시작  [P]",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            width=190, height=60,
+            fg_color=_ACCENT, hover_color=_ACCENT_H,
+            text_color="#0a0a0a", corner_radius=12,
+            command=self._on_calibrate,
+        ).pack(fill="x")
 
         self._root.bind("<p>", lambda e: self._on_calibrate())
         self._root.bind("<P>", lambda e: self._on_calibrate())
-
-        ctk.CTkButton(right, text="비로그인으로 시작",
-                      fg_color="transparent", text_color="gray",
-                      hover_color=("gray70", "gray30"),
-                      command=self._finish).pack(pady=2)
 
     def _on_close(self):
         self._stop_cam.set()
@@ -285,22 +449,18 @@ class StartupWindow:
         self._root.mainloop()
         self._stop_cam.set()
         self._cam_ref.join(timeout=2.0)
-        return self._root  # 트레이 모드에서 CTk 루트 재사용
+        return self._root
 
 
 # ── SettingsWindow ────────────────────────────────────────────────────────────
 
 class SettingsWindow:
-    """
-    트레이 "설정 화면 열기" 클릭 시 표시되는 창.
+    """트레이 "설정 화면 열기" 클릭 시 표시되는 창."""
 
-    좌측: 메인 카메라 루프의 frame_queue 에서 MediaPipe 프레임 수신
-    우측: 마스코트 + 인증 상태 + 로그인/로그아웃 + 캘리브레이션 버튼
-    """
-
-    _FRAME_W = 420
-    _FRAME_H = 315
-    _POLL_MS  = 33
+    _FRAME_W = 520
+    _FRAME_H = 390
+    _PANEL_W = 224
+    _POLL_MS = 33
 
     def __init__(self, detector, auth_manager, live_frame_queue,
                  start_visual, stop_visual, switch_logger,
@@ -320,48 +480,76 @@ class SettingsWindow:
         self._photo            = None
 
     def show_in_main_thread(self):
-        """메인 tkinter 스레드에서 직접 호출. 비주얼 모드 활성 후 창 열기."""
+        global _active_settings_window
+        # 이미 열려 있으면 해당 창을 앞으로 가져오고 종료
+        if (_active_settings_window is not None
+                and _active_settings_window._root is not None):
+            try:
+                if _active_settings_window._root.winfo_exists():
+                    _active_settings_window._root.lift()
+                    _active_settings_window._root.focus_force()
+                    return
+            except Exception:
+                pass
+        _active_settings_window = self
         self._start_visual()
         try:
             self._build_ui()
         except Exception:
             self._stop_visual()
+            _active_settings_window = None
             raise
 
     def _close(self):
+        global _active_settings_window
+        _active_settings_window = None
         self._stop_visual()
         self._auth_msg = None
         if self._root and self._root.winfo_exists():
-            _cancel_all_after(self._root)
-            self._root.destroy()
+            # 설정 창 자신의 _poll_id 만 취소 — 메인 _poll 을 건드리지 않는다
+            if hasattr(self, "_poll_id"):
+                try:
+                    self._root.after_cancel(self._poll_id)
+                except Exception:
+                    pass
+            try:
+                self._root.destroy()
+            except Exception:
+                pass
 
     # ── 캘리브레이션 ──────────────────────────────────────────────────────────
 
     def _on_calibrate(self):
         baseline = self.detector.calibrate()
         if baseline is None:
-            self._status_var.set("자세가 감지되지 않았습니다. 잠시 후 다시 시도하세요.")
-        else:
-            self._status_var.set(f"캘리브레이션 완료!  기준값: {baseline:.3f}")
+            self._auth_msg.set("자세가 감지되지 않았습니다. 잠시 후 다시 시도하세요.")
+            return
+        self._baseline_val.configure(text=f"{baseline:.3f}", text_color=_ACCENT)
+        self._baseline_bar.set(min(abs(baseline) / 0.8, 1.0))
+        self._badge_dot.configure(fg_color=_ACCENT)
+        self._badge_lbl.configure(text="ACTIVE", text_color=_ACCENT)
+        self._auth_msg.set(f"완료 — 기준값 {baseline:.3f}")
 
     # ── 인증 ──────────────────────────────────────────────────────────────────
 
-        
     def _on_google_login(self):
-        self._auth_msg.set("인터넷 브라우저에서 구글 로그인을 진행해주세요...")
-        if self._root: self._root.update()
-        
+        self._auth_msg.set("브라우저에서 구글 로그인을 진행해주세요...")
+        if self._root:
+            self._root.update()
+
         def _do():
             uid = self.auth_manager.login_with_google()
             if uid:
                 self.switch_logger(uid)
                 if self._root:
-                    self._root.after(0, lambda: self._auth_msg.set(f"구글 로그인 성공: {self.auth_manager.get_email()}"))
+                    self._root.after(0, lambda: self._auth_msg.set("로그인 완료"))
                     self._root.after(0, self._update_auth_ui)
-                if self._on_auth_change: self._on_auth_change()
+                if self._on_auth_change:
+                    self._on_auth_change()
             else:
                 err = self.auth_manager.last_error or "알 수 없는 오류"
-                if self._root: self._root.after(0, lambda: self._auth_msg.set(f"구글 로그인 실패: {err}"))
+                if self._root:
+                    self._root.after(0, lambda: self._auth_msg.set(f"로그인 실패: {err}"))
         threading.Thread(target=_do, daemon=True).start()
 
     def _on_logout(self):
@@ -400,6 +588,7 @@ class SettingsWindow:
 
         self._root.title("Turtle Check — 설정")
         self._root.resizable(False, False)
+        self._root.configure(fg_color=_BG)
         self._root.attributes("-topmost", True)
         self._root.protocol("WM_DELETE_WINDOW", self._close)
 
@@ -409,57 +598,128 @@ class SettingsWindow:
             except Exception:
                 pass
 
-        # 좌측: 카메라 피드
-        left = ctk.CTkFrame(self._root, fg_color="black", corner_radius=0)
-        left.pack(side="left")
+        # ── 좌측: 카메라 패널 ─────────────────────────────────────────────
+        left = ctk.CTkFrame(self._root, fg_color=_BG_CAM, corner_radius=0)
+        left.pack(side="left", fill="y")
 
-        self._cam_label = ctk.CTkLabel(left, text="", width=self._FRAME_W, height=self._FRAME_H)
-        self._cam_label.pack()
+        cam_wrap = ctk.CTkFrame(
+            left, fg_color="#0d0d0d",
+            border_color="#1c1c1c", border_width=1, corner_radius=14,
+            width=self._FRAME_W, height=self._FRAME_H,
+        )
+        cam_wrap.pack(padx=14, pady=(14, 10))
+        cam_wrap.pack_propagate(False)
 
-        ctk.CTkLabel(left, text="● MediaPipe 자세 감지 중",
-                     fg_color="transparent", text_color="#00e676",
-                     font=ctk.CTkFont(size=11)).pack(pady=6)
+        self._cam_label = ctk.CTkLabel(
+            cam_wrap, text="", width=self._FRAME_W, height=self._FRAME_H,
+        )
+        self._cam_label.place(relx=0.5, rely=0.5, anchor="center")
 
-        # 우측: 마스코트 + 인증 + 캘리브레이션
-        right = ctk.CTkFrame(self._root, fg_color="transparent", corner_radius=0)
-        right.pack(side="right", fill="both", expand=True, padx=20, pady=14)
+        # MEDIAPIPE ACTIVE 상태 필
+        pill = ctk.CTkFrame(
+            left, fg_color=_SURF, corner_radius=20,
+            border_color=_BORDER, border_width=1,
+        )
+        pill.pack(pady=(0, 14))
+        dot = ctk.CTkFrame(pill, width=7, height=7, corner_radius=4, fg_color=_ACCENT)
+        dot.pack_propagate(False)
+        dot.pack(side="left", padx=(10, 5), pady=7)
+        ctk.CTkLabel(
+            pill, text="MEDIAPIPE ACTIVE",
+            font=ctk.CTkFont(size=9), text_color="#3d4d3d",
+        ).pack(side="left", padx=(0, 10), pady=7)
 
-        ctk.CTkLabel(right, text="Turtle Check",
-                     font=ctk.CTkFont(size=13, weight="bold")).pack(pady=(0, 2))
+        # 세로 구분선
+        tk.Frame(self._root, width=1, bg="#141414").pack(side="left", fill="y")
 
-        _load_mascot(right, self.mascot_path, size=100)
+        # ── 우측: 컨트롤 패널 ─────────────────────────────────────────────
+        right = ctk.CTkFrame(self._root, fg_color=_BG, corner_radius=0, width=self._PANEL_W)
+        right.pack(side="right", fill="y")
+        right.pack_propagate(False)
+
+        inner = ctk.CTkFrame(right, fg_color="transparent")
+        inner.pack(fill="both", expand=True, padx=16, pady=18)
+
+        # 앱 제목
+        ctk.CTkLabel(
+            inner, text="TURTLE CHECK",
+            font=ctk.CTkFont(size=13, weight="bold"), text_color=_TEXT_HI,
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            inner, text="POSTURE MONITOR",
+            font=ctk.CTkFont(size=7), text_color=_TEXT_DIM,
+        ).pack(anchor="w", pady=(1, 10))
+        _hsep(inner)
+
+        # 상태 뱃지
+        badge_f = ctk.CTkFrame(
+            inner, fg_color=_SURF, corner_radius=20,
+            border_color=_BORDER, border_width=1,
+        )
+        badge_f.pack(anchor="w", pady=(8, 8))
+        self._badge_dot = ctk.CTkFrame(badge_f, width=6, height=6, corner_radius=3, fg_color=_YELLOW)
+        self._badge_dot.pack_propagate(False)
+        self._badge_dot.pack(side="left", padx=(8, 4), pady=5)
+        self._badge_lbl = ctk.CTkLabel(
+            badge_f, text="STANDBY",
+            font=ctk.CTkFont(size=8), text_color=_YELLOW,
+        )
+        self._badge_lbl.pack(side="left", padx=(0, 8), pady=5)
+
+        # ACCOUNT 섹션
+        ctk.CTkLabel(
+            inner, text="ACCOUNT",
+            font=ctk.CTkFont(size=7), text_color=_TEXT_DIM,
+        ).pack(anchor="w", pady=(0, 3))
 
         self._auth_msg = tk.StringVar(value="")
-        ctk.CTkLabel(right, textvariable=self._auth_msg,
-                     text_color="gray", wraplength=230).pack(pady=(4, 0))
+        ctk.CTkLabel(
+            inner, textvariable=self._auth_msg,
+            font=ctk.CTkFont(size=8), text_color="#4b5563", wraplength=190,
+        ).pack(anchor="w", pady=(0, 2))
 
         self._login_frame, self._logged_frame, self._logged_lbl = _build_auth_section(
-            right, self._on_google_login, self._on_logout
+            inner, self._on_google_login, self._on_logout,
         )
         self._update_auth_ui()
 
-        ctk.CTkFrame(right, height=2, fg_color=("gray70", "gray30")).pack(fill="x", pady=10)
+        # CALIBRATION 섹션 구분선
+        div = ctk.CTkFrame(inner, fg_color="transparent")
+        div.pack(fill="x", pady=(6, 6))
+        tk.Frame(div, height=1, bg="#141414").pack(side="left", fill="x", expand=True, pady=6)
+        ctk.CTkLabel(
+            div, text="  CALIBRATION  ",
+            font=ctk.CTkFont(size=7), text_color="#1a1a1a",
+        ).pack(side="left")
+        tk.Frame(div, height=1, bg="#141414").pack(side="left", fill="x", expand=True, pady=6)
 
-        ctk.CTkLabel(right, text="바른 자세로 앉은 후\n캘리브레이션을 시작하세요.",
-                     justify="center").pack()
+        ctk.CTkLabel(
+            inner, text="바른 자세로 앉은 후\n버튼을 눌러주세요.",
+            font=ctk.CTkFont(size=8), text_color=_TEXT_MID, justify="left",
+        ).pack(anchor="w", pady=(0, 4))
 
-        self._status_var = tk.StringVar(value="")
-        ctk.CTkLabel(right, textvariable=self._status_var,
-                     text_color="#5c9fe8", wraplength=230).pack(pady=4)
+        baseline_card, self._baseline_val, self._baseline_bar = _build_baseline_card(inner)
+        baseline_card.pack(fill="x", pady=(0, 8))
 
-        ctk.CTkButton(right, text="캘리브레이션 시작 (P)",
-                      font=ctk.CTkFont(size=13, weight="bold"), width=200,
-                      command=self._on_calibrate).pack(pady=4)
+        ctk.CTkButton(
+            inner, text="캘리브레이션 시작  [P]",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            width=190, height=60,
+            fg_color=_ACCENT, hover_color=_ACCENT_H,
+            text_color="#0a0a0a", corner_radius=12,
+            command=self._on_calibrate,
+        ).pack(fill="x", pady=(0, 8))
+
+        ctk.CTkButton(
+            inner, text="창 닫기",
+            fg_color="transparent", text_color=_TEXT_DIM,
+            hover_color=_SURF, corner_radius=8,
+            font=ctk.CTkFont(size=8), height=26,
+            command=self._close,
+        ).pack(fill="x")
 
         self._root.bind("<p>", lambda e: self._on_calibrate())
         self._root.bind("<P>", lambda e: self._on_calibrate())
-
-        ctk.CTkFrame(right, height=2, fg_color=("gray70", "gray30")).pack(fill="x", pady=8)
-
-        ctk.CTkButton(right, text="창 닫기",
-                      fg_color="transparent", text_color="gray",
-                      hover_color=("gray70", "gray30"),
-                      command=self._close).pack(pady=2)
 
         self._poll_id = self._root.after(self._POLL_MS, self._poll_frame)
 
@@ -467,12 +727,7 @@ class SettingsWindow:
 # ── AuthWindow ────────────────────────────────────────────────────────────────
 
 class AuthWindow:
-    """
-    트레이 메뉴의 '로그인' 클릭 시 표시되는 컴팩트 창.
-
-    show_in_main_thread(on_complete) 를 메인 tkinter 스레드에서 직접 호출.
-    on_complete(uid | None) 은 창이 닫힐 때 호출됨.
-    """
+    """트레이 메뉴 '로그인' 클릭 시 표시되는 컴팩트 창."""
 
     def __init__(self, auth_manager, parent=None):
         self.auth_manager = auth_manager
@@ -481,7 +736,6 @@ class AuthWindow:
         self._on_complete = None
 
     def show_in_main_thread(self, on_complete):
-        """메인 tkinter 스레드에서 직접 호출. 창을 열고 즉시 반환."""
         self._on_complete = on_complete
         self._build_ui()
 
@@ -492,16 +746,16 @@ class AuthWindow:
             self._on_complete(uid)
 
     def _on_google_login(self):
-        self._msg.set("인터넷 브라우저에서 구글 로그인을 진행해주세요...")
+        self._msg.set("브라우저에서 구글 로그인을 진행해주세요...")
         self._root.update()
-        
+
         def _do():
             uid = self.auth_manager.login_with_google()
             if uid:
                 self._root.after(0, lambda: self._close(uid))
             else:
                 err = self.auth_manager.last_error or "알 수 없는 오류"
-                self._root.after(0, lambda: self._msg.set(f"구글 로그인 실패: {err}"))
+                self._root.after(0, lambda: self._msg.set(f"로그인 실패: {err}"))
         threading.Thread(target=_do, daemon=True).start()
 
     def _build_ui(self):
@@ -510,8 +764,9 @@ class AuthWindow:
         else:
             self._root = ctk.CTk()
 
-        self._root.title("로그인 / 회원가입")
+        self._root.title("로그인")
         self._root.resizable(False, False)
+        self._root.configure(fg_color=_BG)
         self._root.attributes("-topmost", True)
         self._root.protocol("WM_DELETE_WINDOW", lambda: self._close(None))
 
@@ -521,26 +776,58 @@ class AuthWindow:
             except Exception:
                 pass
 
-        frame = ctk.CTkFrame(self._root, fg_color="transparent")
-        frame.pack(padx=24, pady=20)
+        frame = ctk.CTkFrame(self._root, fg_color=_SURF, corner_radius=14,
+                             border_color=_BORDER, border_width=1)
+        frame.pack(padx=24, pady=24)
 
-        ctk.CTkLabel(frame, text="Turtle Check",
-                     font=ctk.CTkFont(size=13, weight="bold")).pack(pady=(0, 10))
+        inner = ctk.CTkFrame(frame, fg_color="transparent")
+        inner.pack(padx=24, pady=20)
+
+        ctk.CTkLabel(
+            inner, text="TURTLE CHECK",
+            font=ctk.CTkFont(size=13, weight="bold"), text_color=_TEXT_HI,
+        ).pack(pady=(0, 2))
+        ctk.CTkLabel(
+            inner, text="POSTURE MONITOR",
+            font=ctk.CTkFont(size=7), text_color=_TEXT_DIM,
+        ).pack(pady=(0, 16))
+
+        _hsep(inner)
 
         self._msg = tk.StringVar(value="")
-        ctk.CTkLabel(frame, textvariable=self._msg,
-                     text_color="gray", wraplength=250).pack()
+        ctk.CTkLabel(
+            inner, textvariable=self._msg,
+            font=ctk.CTkFont(size=8), text_color="#4b5563",
+            wraplength=220,
+        ).pack(pady=(12, 4))
 
-        form = ctk.CTkFrame(frame, fg_color="transparent")
-        form.pack(pady=10)
-        
-        google_btn = ctk.CTkButton(frame, text="G 구글계정으로 시작", width=212,
-            fg_color="#db4437", hover_color="#c23321", text_color="white",
-            font=ctk.CTkFont(weight="bold"),
-            command=self._on_google_login)
-        google_btn.pack(pady=(0, 10))
+        google_icon = ctk.CTkImage(
+            light_image=_GOOGLE_ICON_IMG,
+            dark_image=_GOOGLE_ICON_IMG,
+            size=(16, 16),
+        )
+        ctk.CTkButton(
+            inner,
+            text="구글 계정으로 시작",
+            image=google_icon,
+            compound="left",
+            anchor="w",
+            width=220,
+            height=38,
+            fg_color="#161616",
+            border_color=_BORDER,
+            border_width=1,
+            corner_radius=10,
+            text_color="#6b7280",
+            hover_color="#1e1e1e",
+            font=ctk.CTkFont(size=10),
+            command=self._on_google_login,
+        ).pack(pady=(4, 10))
 
-        ctk.CTkButton(frame, text="취소",
-                      fg_color="transparent", text_color="gray",
-                      hover_color=("gray70", "gray30"),
-                      command=lambda: self._close(None)).pack(pady=(10, 0))
+        ctk.CTkButton(
+            inner, text="취소",
+            fg_color="transparent", text_color=_TEXT_DIM,
+            hover_color=_SURF, corner_radius=8,
+            font=ctk.CTkFont(size=9), height=28,
+            command=lambda: self._close(None),
+        ).pack()

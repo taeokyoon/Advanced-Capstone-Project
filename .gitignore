@@ -24,3 +24,6 @@ firebase_key.json
 .env
 CLAUDE.md
 client_secret.json
+
+# 디자인
+.superpowers/
