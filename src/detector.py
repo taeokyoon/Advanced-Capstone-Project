@@ -12,6 +12,8 @@ _MIN_VISIBILITY   = 0.5   # 랜드마크 신뢰도 하한
 _MIN_SHOULDER_W   = 0.05  # 어깨 너비 최솟값 (측면 촬영 필터)
 _EVAL_INTERVAL    = 1.0   # 판정 주기 (초)
 _MIN_SCORES       = 5     # 판정에 필요한 최소 샘플 수
+_Z_WEIGHT         = 0.3   # z축 보조 가중치
+_Z_GATE_Y         = 0.15  # 이 이상 y가 변하면 z 기여를 점진적으로 억제
 
 
 class PostureDetector:
@@ -65,7 +67,14 @@ class PostureDetector:
                 dist = ((NOSE.x - pt.x) ** 2 + (NOSE.y - pt.y) ** 2) ** 0.5
                 if dist < 0.20:
                     return None
-        return ((LS.y + RS.y) / 2 - NOSE.y) / sw
+
+        y_score   = (LS.y + RS.y) / 2 - NOSE.y
+        # y 변화가 클수록(고개 숙임) z 기여를 줄여 오탐 방지
+        # y 변화가 작을 때(진짜 앞으로만 내밀기)만 z 가 의미 있음
+        z_forward = NOSE.z - (LS.z + RS.z) / 2
+        y_magnitude = abs(y_score) / sw           # 정규화된 y 변화량
+        z_gate = max(0.0, 1.0 - y_magnitude / _Z_GATE_Y)
+        return (y_score + _Z_WEIGHT * z_forward * z_gate) / sw
 
     def process_frame(self, frame) -> float | None:
         """BGR 프레임을 받아 head_forward_score 반환. 감지 실패 시 None."""

@@ -29,5 +29,5 @@ plyer>=2.1.0; sys_platform == 'darwin'
 # google 로그인
 google-auth-oauthlib
 
-# 뎁스 추정 모델
-depth_anything_v2
+# .exe 파일 생성
+pyinstaller

@@ -18,6 +18,15 @@ python turtle_neck.py
 
 트레이 아이콘 우클릭 → **캘리브레이션** → 모니터링 시작
 
+# 실제 워크플로우
+코드 수정
+    ↓
+py turtle_neck.py  ← 빠른 테스트 (이걸로 주로 개발)
+    ↓
+잘 되면 pyinstaller로 빌드  ← .exe 갱신
+    ↓
+.exe로 최종 확인
+
 ## 상세 문서
 
 [DEVELOP.md](DEVELOP.md) 참고
