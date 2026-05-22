@@ -21,7 +21,7 @@
 
 ## 기능 목록
 
-- **실시간 자세 감지** — MediaPipe Pose로 코·어깨 좌표를 추출하여 거북목 여부 판정
+- **실시간 자세 감지** — MediaPipe Pose로 코·어깨 좌표(x·y·z)를 추출하여 거북목 여부 판정. z축 보조 가중치(`_Z_WEIGHT`)로 오탐 감소
 - **캘리브레이션** — 사용자의 정상 자세를 기준값으로 설정, 개인 체형·카메라 위치 차이 자동 보정
 - **히스테리시스 판정** — 진입/해제 임계값을 다르게 설정해 상태 떨림(flickering) 방지
 - **로그인 / 비로그인 모드** — 로그인 없이도 즉시 탐지 가능, 로그인 시 Firebase 통계 연동
@@ -32,6 +32,7 @@
 - **OS 알림** — 거북목 감지 시 10초 쿨다운으로 반복 알림 방지 (Windows: 토스트 알림 / macOS: 데스크탑 알림)
 - **JSON Lines 로그** — 60초마다 `posture_log.jsonl`에 자동 저장
 - **Firestore 업로드** — 로그인 사용자 전용, 오프라인 큐로 네트워크 단절 복구 지원
+- **Firebase 누적 통계** — Firestore 직접 쿼리로 오늘·7일·30일 누적 통계 조회 (모바일 앱 데이터 포함)
 - **구조화 로깅** — `logs/app.log`에 회전 파일 로그 자동 기록
 
 ---
@@ -98,7 +99,9 @@ MediaPipe Pose
     │  NOSE, LEFT/RIGHT_SHOULDER 랜드마크 추출
     ▼
 _calc_score()
-    │  head_forward_score = (shoulder_y - nose_y) / shoulder_width
+    │  y_score    = (shoulder_y - nose_y)
+    │  z_forward  = nose_z - shoulder_avg_z   (고개 숙임 시 z 기여 억제)
+    │  score      = (y_score + Z_WEIGHT * z_forward * z_gate) / shoulder_width
     ▼
 슬라이딩 윈도우 (deque, maxlen=200, 유효기간 1초)
     │  최근 1초 평균 score 계산 (최소 5샘플)
@@ -229,6 +232,8 @@ TurtleNeckDetector/
 | `_MIN_SHOULDER_W` | `0.05` | 어깨 너비 최솟값 (측면 촬영 필터) |
 | `_EVAL_INTERVAL` | `1.0` | 판정 주기 (초) |
 | `_MIN_SCORES` | `5` | 판정에 필요한 최소 샘플 수 |
+| `_Z_WEIGHT` | `0.3` | z축 보조 가중치 (0 = y축 전용) |
+| `_Z_GATE_Y` | `0.15` | y 변화량이 이 값 이상이면 z 기여 점진 억제 |
 
 | 메서드 | 반환 | 설명 |
 |---|---|---|
@@ -451,9 +456,11 @@ TurtleNeckDetector/
 |---|---|---|
 | 1단계: 모드 분리·인증 | ✅ 완료 | AuthManager, Google OAuth, 세션 지속 |
 | 2단계: 데이터 연동 파이프라인 | ✅ 완료 | uid 경로 분리, UploadQueue, Firestore 업로드 |
-| 3단계: 통계 조회 | 🔶 부분 완료 | 로컬 JSONL 기반 팝업 구현, Firestore 쿼리 미구현 |
-| 4단계: exe 배포 | 🔶 진행 중 | PyInstaller 명령 확보, build.bat 미작성, 신규 환경 실행 검증 필요 |
+| 3단계: 통계 조회 | ✅ 완료 | `src/stats.py` 구현 — 로컬 오늘/7일 + Firestore 클라우드 통계 병합 |
+| 4단계: exe 배포 | 🔶 진행 중 | `build.bat` 작성 완료, 신규 환경 실행 검증 필요 |
 | 5단계: 운영 안정화 | ✅ 완료 | logging 모듈 도입 (log_config.py), app.log 자동 기록 |
+| z축 자세 판정 | ✅ 완료 | `_Z_WEIGHT` + `_Z_GATE_Y` 로 고개 숙임 오탐 감소 |
+| 스레드 안전성 | ✅ 완료 | `PostureDetector._lock` 도입, 복수 스레드 동시 접근 안전 |
 | 리팩토링 | ✅ 완료 | AppState 캡슐화, 시크릿 .env 분리, 상수 추출, UI 공통 위젯 추출, 버그 수정 |
 
 ### 리팩토링에서 해결된 항목
@@ -478,12 +485,7 @@ TurtleNeckDetector/
 
 ### 우선순위 높음
 
-- **3단계 완성**: `src/stats.py` 구현 — Firestore 기반 일/주 통계 쿼리
 - **4단계 완성**: 실제 신규 PC에서 exe 실행 검증 (로그인·캘리브레이션·알림 전체)
-
-### 우선순위 중간
-
-- **`PostureDetector` 스레드 안전성**: `StartupWindow` 카메라 스레드와 메인 스레드 동시 접근 가능성 해소
 
 ### 추후 검토
 

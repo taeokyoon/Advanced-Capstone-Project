@@ -10,7 +10,8 @@ firebase_key.json 이 없거나 초기화 실패 시 graceful degradation.
 import json
 import logging
 import os
-from datetime import datetime
+import sys
+from datetime import datetime, timedelta
 
 import requests
 
@@ -81,6 +82,81 @@ class FirebaseUploader:
         except Exception as e:
             log.error("업로드 실패: %s", e)
             return False
+
+    def _init_admin(self) -> bool:
+        """firebase-admin 초기화 (싱글톤). firebase_key.json 없으면 False."""
+        try:
+            import firebase_admin
+            from firebase_admin import credentials
+
+            if firebase_admin._apps:
+                return True
+
+            # 개발 환경 또는 exe 번들 내부에서 키 파일 탐색
+            candidates = ["firebase_key.json"]
+            if getattr(sys, "frozen", False):
+                candidates.append(os.path.join(sys._MEIPASS, "firebase_key.json"))
+
+            key_path = next((p for p in candidates if os.path.exists(p)), None)
+            if not key_path:
+                log.warning("firebase_key.json 없음 — Firestore 직접 조회 불가")
+                return False
+
+            firebase_admin.initialize_app(credentials.Certificate(key_path))
+            return True
+        except Exception as e:
+            log.warning("firebase-admin 초기화 실패: %s", e)
+            return False
+
+    def get_firestore_cumulative_stats(self, uid: str, days: int = 30) -> dict | None:
+        """Firestore에서 최근 N일 누적 통계 직접 조회."""
+        if not self._init_admin():
+            return None
+        try:
+            from firebase_admin import firestore
+            db = firestore.client()
+            user_ref = db.collection("hour").document(uid)
+
+            today = datetime.now()
+            result = {"today": {}, "week": {}, "total": {}}
+
+            def _empty():
+                return {"total_seconds": 0, "turtle_seconds": 0, "bad_count": 0}
+
+            buckets = {"today": _empty(), "week": _empty(), "total": _empty()}
+
+            for i in range(days):
+                date = (today - timedelta(days=i)).strftime("%Y-%m-%d")
+                try:
+                    docs = list(user_ref.collection(date).stream())
+                except Exception:
+                    continue
+
+                for doc in docs:
+                    d = doc.to_dict() or {}
+                    t = d.get("total_tracked_seconds", 0)
+                    u = d.get("total_turtle_seconds", 0)
+                    b = d.get("bad_posture_count", 0)
+
+                    buckets["total"]["total_seconds"]  += t
+                    buckets["total"]["turtle_seconds"] += u
+                    buckets["total"]["bad_count"]      += b
+
+                    if i == 0:
+                        buckets["today"]["total_seconds"]  += t
+                        buckets["today"]["turtle_seconds"] += u
+                        buckets["today"]["bad_count"]      += b
+
+                    if i < 7:
+                        buckets["week"]["total_seconds"]  += t
+                        buckets["week"]["turtle_seconds"] += u
+                        buckets["week"]["bad_count"]      += b
+
+            buckets["days"] = days
+            return buckets
+        except Exception as e:
+            log.error("Firestore 누적 통계 조회 실패: %s", e)
+            return None
 
     def get_stats(self, uid: str) -> dict | None:
         id_token = self.auth_manager.get_valid_token()

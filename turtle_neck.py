@@ -33,12 +33,13 @@ from src.utils.upload_queue      import UploadQueue
 # ── 경로 설정 (개발/exe 공통) ─────────────────────────────────────────────────
 
 if getattr(sys, "frozen", False):
-    _BASE = sys._MEIPASS
+    _BASE = sys._MEIPASS   # 번들 리소스 (.env, client_secret, config, assets 모두 포함)
 else:
     _BASE = os.path.dirname(os.path.abspath(__file__))
 
-_CONFIG_PATH  = os.path.join(_BASE, "config.json")
-_MASCOT_PATH  = os.path.join(_BASE, "assets", "mascot.png")
+_CONFIG_PATH        = os.path.join(_BASE, "config.json")
+_MASCOT_PATH        = os.path.join(_BASE, "assets", "mascot.png")
+_CLIENT_SECRET_PATH = os.path.join(_BASE, "client_secret.json")
 
 load_dotenv(os.path.join(_BASE, ".env"))
 
@@ -104,34 +105,28 @@ def _show_stats(app: AppState) -> None:
     if not uid:
         return
 
-    log_path    = os.path.join(app.get_user_dir(uid), "posture_log.jsonl")
-    today       = datetime.now().strftime("%Y-%m-%d")
-    total_secs  = turtle_secs = count = 0
+    # Firebase 누적 통계 우선 시도
+    fb_stats = None
+    try:
+        fb_stats = app.uploader.get_firestore_cumulative_stats(uid, days=30)
+    except Exception:
+        pass
 
-    if os.path.exists(log_path):
-        with open(log_path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    rec = json.loads(line)
-                    if rec.get("timestamp", "").startswith(today):
-                        total_secs  += rec.get("total_seconds", 0)
-                        turtle_secs += rec.get("turtle_seconds", 0)
-                        count       += 1
-                except json.JSONDecodeError:
-                    continue
+    if fb_stats:
+        from src.stats import format_firebase_stats
+        msg = format_firebase_stats(app.auth_manager.get_email(), fb_stats)
+    else:
+        # Firebase 실패 시 로컬 JSONL 폴백
+        from src.stats import get_today_local, get_week_local, format_stats
+        log_path = os.path.join(app.get_user_dir(uid), "posture_log.jsonl")
+        msg = format_stats(
+            app.auth_manager.get_email(),
+            get_today_local(log_path),
+            get_week_local(log_path),
+        )
 
-    ratio = (turtle_secs / total_secs * 100) if total_secs > 0 else 0
-    msg   = (
-        f"계정: {app.auth_manager.get_email()}\n"
-        f"오늘 기록: {count}건 ({total_secs // 60}분)\n"
-        f"거북목 비율: {ratio:.1f}%\n"
-        f"거북목 시간: {turtle_secs // 60}분"
-    )
     app.tk_queue.put(
-        lambda: messagebox.showinfo("오늘의 통계", msg, parent=app.tk_root)
+        lambda: messagebox.showinfo("자세 통계", msg, parent=app.tk_root)
     )
 
 # ── 트레이 콜백 ───────────────────────────────────────────────────────────────

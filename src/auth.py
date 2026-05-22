@@ -85,15 +85,21 @@ class AuthManager:
         
     def login_with_google(self, client_secret_path: str = "client_secret.json") -> str | None:
         if not self.api_key:
-            log.warning("firebase_api_key 가 설정되지 않았습니다.")
+            self.last_error = ".env 파일에 FIREBASE_API_KEY 가 설정되지 않았습니다."
+            log.warning(self.last_error)
             return None
 
         try:
-            # 방금 pip install로 설치한 구글 라이브러리를 불러옵니다.
             from google_auth_oauthlib.flow import InstalledAppFlow
         except ImportError:
             self.last_error = "구글 로그인 라이브러리가 설치되지 않았습니다. pip install google-auth-oauthlib 를 실행해주세요."
             return None
+
+        # exe 실행 시 client_secret.json 을 번들 내부(_MEIPASS)에서 찾음
+        import sys as _sys
+        if not os.path.isabs(client_secret_path) and not os.path.exists(client_secret_path):
+            if getattr(_sys, "frozen", False):
+                client_secret_path = os.path.join(_sys._MEIPASS, client_secret_path)
 
         if not os.path.exists(client_secret_path):
             self.last_error = f"{client_secret_path} 파일이 앱 폴더에 없습니다!"
