@@ -398,9 +398,10 @@ class StartupWindow:
 
         ctk.CTkButton(
             inner, text="비로그인으로 계속",
-            fg_color="transparent", text_color=_TEXT_DIM,
-            hover_color=_SURF, corner_radius=8,
-            font=ctk.CTkFont(size=8), height=26, width=190,
+            fg_color=_SURF, border_color=_BORDER, border_width=1,
+            text_color="#6b7280", hover_color="#161616",
+            corner_radius=10, font=ctk.CTkFont(size=10),
+            height=36, width=190,
             command=self._finish,
         ).pack(anchor="w", pady=(2, 6))
 
