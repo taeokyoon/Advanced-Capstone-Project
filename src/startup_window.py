@@ -167,9 +167,9 @@ def _build_baseline_card(parent) -> tuple:
     row = ctk.CTkFrame(card, fg_color="transparent")
     row.pack(fill="x", padx=10, pady=(7, 3))
     ctk.CTkLabel(row, text="BASELINE",
-                 font=ctk.CTkFont(size=7), text_color=_TEXT_DIM).pack(side="left")
+                 font=ctk.CTkFont(size=7), text_color="#6b7280").pack(side="left")
     val_lbl = ctk.CTkLabel(row, text="—",
-                            font=ctk.CTkFont(size=7), text_color=_TEXT_DIM)
+                            font=ctk.CTkFont(size=7), text_color="#6b7280")
     val_lbl.pack(side="right")
     bar = ctk.CTkProgressBar(
         card, height=3, corner_radius=2,
@@ -248,7 +248,13 @@ class StartupWindow:
         self._baseline_bar.set(min(abs(baseline) / 0.8, 1.0))
         self._badge_dot.configure(fg_color=_ACCENT)
         self._badge_lbl.configure(text="ACTIVE", text_color=_ACCENT)
-        self._root.after(800, self._finish)
+        self._auth_msg.set(f"완료 — 기준값 {baseline:.3f}  만족하면 아래 버튼을 눌러주세요.")
+
+    def _on_continue(self):
+        if self.detector.baseline_score is None:
+            self._auth_msg.set("캘리브레이션이 설정되지 않았습니다. 캘리브레이션을 먼저 설정해주세요.")
+            return
+        self._finish()
 
     def _finish(self):
         self._auth_msg = None
@@ -360,7 +366,7 @@ class StartupWindow:
         ).pack(anchor="w")
         ctk.CTkLabel(
             inner, text="POSTURE MONITOR",
-            font=ctk.CTkFont(size=7), text_color=_TEXT_DIM,
+            font=ctk.CTkFont(size=7), text_color="#6b7280",
         ).pack(anchor="w", pady=(1, 10))
         _hsep(inner)
 
@@ -382,7 +388,7 @@ class StartupWindow:
         # ACCOUNT 섹션
         ctk.CTkLabel(
             inner, text="ACCOUNT",
-            font=ctk.CTkFont(size=7), text_color=_TEXT_DIM,
+            font=ctk.CTkFont(size=7), text_color="#6b7280",
         ).pack(anchor="w", pady=(0, 3))
 
         self._auth_msg = tk.StringVar(value="")
@@ -402,7 +408,7 @@ class StartupWindow:
             text_color="#6b7280", hover_color="#161616",
             corner_radius=10, font=ctk.CTkFont(size=10),
             height=36, width=190,
-            command=self._finish,
+            command=self._on_continue,
         ).pack(anchor="w", pady=(2, 6))
 
         # CALIBRATION 섹션 구분선
@@ -411,13 +417,13 @@ class StartupWindow:
         tk.Frame(div, height=1, bg="#141414").pack(side="left", fill="x", expand=True, pady=6)
         ctk.CTkLabel(
             div, text="  CALIBRATION  ",
-            font=ctk.CTkFont(size=7), text_color="#1a1a1a",
+            font=ctk.CTkFont(size=7), text_color="#6b7280",
         ).pack(side="left")
         tk.Frame(div, height=1, bg="#141414").pack(side="left", fill="x", expand=True, pady=6)
 
         ctk.CTkLabel(
             inner, text="바른 자세로 앉은 후\n버튼을 눌러주세요.",
-            font=ctk.CTkFont(size=8), text_color=_TEXT_MID, justify="left",
+            font=ctk.CTkFont(size=8), text_color="#9ca3af", justify="left",
         ).pack(anchor="w", pady=(0, 4))
 
         # 베이스라인 카드
@@ -638,8 +644,16 @@ class SettingsWindow:
         right.pack(side="right", fill="y")
         right.pack_propagate(False)
 
+        ctk.CTkButton(
+            right, text="창 닫기",
+            fg_color="transparent", text_color="#4b5563",
+            hover_color=_SURF, corner_radius=8,
+            font=ctk.CTkFont(size=8), height=26,
+            command=self._close,
+        ).pack(side="bottom", fill="x", padx=16, pady=(0, 14))
+
         inner = ctk.CTkFrame(right, fg_color="transparent")
-        inner.pack(fill="both", expand=True, padx=16, pady=18)
+        inner.pack(fill="both", expand=True, padx=16, pady=(18, 4))
 
         # 앱 제목
         ctk.CTkLabel(
@@ -648,7 +662,7 @@ class SettingsWindow:
         ).pack(anchor="w")
         ctk.CTkLabel(
             inner, text="POSTURE MONITOR",
-            font=ctk.CTkFont(size=7), text_color=_TEXT_DIM,
+            font=ctk.CTkFont(size=7), text_color="#6b7280",
         ).pack(anchor="w", pady=(1, 10))
         _hsep(inner)
 
@@ -670,7 +684,7 @@ class SettingsWindow:
         # ACCOUNT 섹션
         ctk.CTkLabel(
             inner, text="ACCOUNT",
-            font=ctk.CTkFont(size=7), text_color=_TEXT_DIM,
+            font=ctk.CTkFont(size=7), text_color="#6b7280",
         ).pack(anchor="w", pady=(0, 3))
 
         self._auth_msg = tk.StringVar(value="")
@@ -690,13 +704,13 @@ class SettingsWindow:
         tk.Frame(div, height=1, bg="#141414").pack(side="left", fill="x", expand=True, pady=6)
         ctk.CTkLabel(
             div, text="  CALIBRATION  ",
-            font=ctk.CTkFont(size=7), text_color="#1a1a1a",
+            font=ctk.CTkFont(size=7), text_color="#6b7280",
         ).pack(side="left")
         tk.Frame(div, height=1, bg="#141414").pack(side="left", fill="x", expand=True, pady=6)
 
         ctk.CTkLabel(
             inner, text="바른 자세로 앉은 후\n버튼을 눌러주세요.",
-            font=ctk.CTkFont(size=8), text_color=_TEXT_MID, justify="left",
+            font=ctk.CTkFont(size=8), text_color="#9ca3af", justify="left",
         ).pack(anchor="w", pady=(0, 4))
 
         baseline_card, self._baseline_val, self._baseline_bar = _build_baseline_card(inner)
@@ -709,14 +723,6 @@ class SettingsWindow:
             fg_color=_ACCENT, hover_color=_ACCENT_H,
             text_color="#0a0a0a", corner_radius=12,
             command=self._on_calibrate,
-        ).pack(fill="x", pady=(0, 8))
-
-        ctk.CTkButton(
-            inner, text="창 닫기",
-            fg_color="transparent", text_color=_TEXT_DIM,
-            hover_color=_SURF, corner_radius=8,
-            font=ctk.CTkFont(size=8), height=26,
-            command=self._close,
         ).pack(fill="x")
 
         self._root.bind("<p>", lambda e: self._on_calibrate())
