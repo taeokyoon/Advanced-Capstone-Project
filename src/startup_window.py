@@ -109,7 +109,11 @@ def _build_auth_section(parent, google_cmd, logout_cmd) -> tuple:
         dark_image=_GOOGLE_ICON_IMG,
         size=(16, 16),
     )
-    login_frame = ctk.CTkFrame(parent, fg_color="transparent")
+    # 래퍼를 parent에 고정 — 내부 토글이 parent의 pack 순서를 바꾸지 않음
+    wrapper = ctk.CTkFrame(parent, fg_color="transparent")
+    wrapper.pack(fill="x", pady=4)
+
+    login_frame = ctk.CTkFrame(wrapper, fg_color="transparent")
     ctk.CTkButton(
         login_frame,
         text="구글 계정으로 시작",
@@ -128,7 +132,7 @@ def _build_auth_section(parent, google_cmd, logout_cmd) -> tuple:
         command=google_cmd,
     ).pack(pady=(0, 4))
 
-    logged_frame = ctk.CTkFrame(parent, fg_color="transparent")
+    logged_frame = ctk.CTkFrame(wrapper, fg_color="transparent")
     logged_lbl   = tk.StringVar()
     ctk.CTkLabel(
         logged_frame, textvariable=logged_lbl,
@@ -149,11 +153,11 @@ def _refresh_auth_ui(auth_manager, login_frame, logged_frame, logged_lbl) -> Non
     """auth_manager 상태에 따라 비로그인·로그인 프레임을 전환."""
     if auth_manager.is_logged_in():
         login_frame.pack_forget()
-        logged_frame.pack(fill="x", pady=4)
+        logged_frame.pack(fill="x")
         logged_lbl.set(f"✓  {auth_manager.get_email()}")
     else:
         logged_frame.pack_forget()
-        login_frame.pack(fill="x", pady=4)
+        login_frame.pack(fill="x")
 
 
 # ── 공유: 캘리브레이션 베이스라인 카드 ──────────────────────────────────────────
@@ -299,6 +303,11 @@ class StartupWindow:
 
     def _update_auth_ui(self):
         _refresh_auth_ui(self.auth_manager, self._login_frame, self._logged_frame, self._logged_lbl)
+        if hasattr(self, "_continue_btn"):
+            if self.auth_manager.is_logged_in():
+                self._continue_btn.configure(text="시작하기")
+            else:
+                self._continue_btn.configure(text="비로그인으로 계속")
 
     # ── UI 빌드 ───────────────────────────────────────────────────────────────
 
@@ -402,14 +411,16 @@ class StartupWindow:
         )
         self._update_auth_ui()
 
-        ctk.CTkButton(
+        self._continue_btn = ctk.CTkButton(
             inner, text="비로그인으로 계속",
             fg_color=_SURF, border_color=_BORDER, border_width=1,
             text_color="#6b7280", hover_color="#161616",
             corner_radius=10, font=ctk.CTkFont(size=10),
             height=36, width=190,
             command=self._on_continue,
-        ).pack(anchor="w", pady=(2, 6))
+        )
+        self._continue_btn.pack(anchor="w", pady=(2, 6))
+        self._update_auth_ui()
 
         # CALIBRATION 섹션 구분선
         div = ctk.CTkFrame(inner, fg_color="transparent")
