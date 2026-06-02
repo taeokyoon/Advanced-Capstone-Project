@@ -102,35 +102,55 @@ def _hsep(parent) -> None:
 
 # ── 공유: 인증 UI 빌더 ───────────────────────────────────────────────────────
 
-def _build_auth_section(parent, google_cmd, logout_cmd) -> tuple:
-    """비로그인·로그인 전환 프레임 쌍 생성. (login_frame, logged_frame, logged_lbl) 반환."""
+def _build_auth_section(parent, google_cmd, email_cmd, logout_cmd) -> tuple:
+    """login_frame, logged_frame, logged_lbl, email_entry, pw_entry 반환."""
     google_icon = ctk.CTkImage(
         light_image=_GOOGLE_ICON_IMG,
         dark_image=_GOOGLE_ICON_IMG,
         size=(16, 16),
     )
-    # 래퍼를 parent에 고정 — 내부 토글이 parent의 pack 순서를 바꾸지 않음
     wrapper = ctk.CTkFrame(parent, fg_color="transparent")
-    wrapper.pack(fill="x", pady=4)
+    wrapper.pack(fill="x", pady=2)
 
     login_frame = ctk.CTkFrame(wrapper, fg_color="transparent")
+
+    _entry_kw = dict(
+        width=190, height=28,
+        fg_color=_SURF, border_color=_BORDER, border_width=1,
+        corner_radius=8, text_color=_TEXT_HI,
+        placeholder_text_color="#4b5563",
+        font=ctk.CTkFont(size=10),
+    )
+    email_entry = ctk.CTkEntry(login_frame, placeholder_text="이메일", **_entry_kw)
+    email_entry.pack(pady=(0, 3))
+
+    pw_entry = ctk.CTkEntry(login_frame, placeholder_text="비밀번호", show="*", **_entry_kw)
+    pw_entry.pack(pady=(0, 3))
+
+    email_entry.bind("<Return>", lambda e: pw_entry.focus())
+    pw_entry.bind("<Return>", lambda e: email_cmd())
+
+    ctk.CTkButton(
+        login_frame, text="로그인",
+        width=190, height=34,
+        fg_color=_SURF, border_color=_BORDER, border_width=1,
+        corner_radius=10, text_color="#6b7280", hover_color="#161616",
+        font=ctk.CTkFont(size=10),
+        command=email_cmd,
+    ).pack(pady=(0, 3))
+
     ctk.CTkButton(
         login_frame,
-        text="구글 계정으로 시작",
+        text="구글 계정으로 로그인",
         image=google_icon,
         compound="left",
         anchor="w",
-        width=190,
-        height=36,
-        fg_color=_SURF,
-        border_color=_BORDER,
-        border_width=1,
-        corner_radius=10,
-        text_color="#6b7280",
-        hover_color="#161616",
+        width=190, height=34,
+        fg_color=_SURF, border_color=_BORDER, border_width=1,
+        corner_radius=10, text_color="#6b7280", hover_color="#161616",
         font=ctk.CTkFont(size=10),
         command=google_cmd,
-    ).pack(pady=(0, 4))
+    ).pack()
 
     logged_frame = ctk.CTkFrame(wrapper, fg_color="transparent")
     logged_lbl   = tk.StringVar()
@@ -146,7 +166,7 @@ def _build_auth_section(parent, google_cmd, logout_cmd) -> tuple:
         command=logout_cmd,
     ).pack()
 
-    return login_frame, logged_frame, logged_lbl
+    return login_frame, logged_frame, logged_lbl, email_entry, pw_entry
 
 
 def _refresh_auth_ui(auth_manager, login_frame, logged_frame, logged_lbl) -> None:
@@ -190,7 +210,7 @@ class StartupWindow:
     """앱 시작 시 표시되는 창. 좌: 카메라 피드, 우: 로그인 + 캘리브레이션."""
 
     _FRAME_W = 520
-    _FRAME_H = 390
+    _FRAME_H = 440
     _PANEL_W = 224
     _POLL_MS = 33
 
@@ -269,6 +289,34 @@ class StartupWindow:
         self._root.quit()
 
     # ── 로그인 / 로그아웃 ─────────────────────────────────────────────────────
+
+    def _on_email_login(self):
+        email = self._email_entry.get().strip()
+        pw    = self._pw_entry.get()
+        if not email or not pw:
+            self._auth_msg.set("이메일과 비밀번호를 입력해주세요.")
+            return
+        self._auth_msg.set("로그인 중...")
+        self._root.update()
+
+        def _do():
+            uid = self.auth_manager.login_with_email(email, pw)
+            if self._stop_cam.is_set() or not self._root.winfo_exists():
+                return
+            if uid:
+                self.switch_logger(uid)
+                try:
+                    self._root.after(0, lambda: self._auth_msg.set("로그인 완료"))
+                    self._root.after(0, self._update_auth_ui)
+                except Exception:
+                    pass
+            else:
+                err = self.auth_manager.last_error or "알 수 없는 오류"
+                try:
+                    self._root.after(0, lambda: self._auth_msg.set(f"로그인 실패: {err}"))
+                except Exception:
+                    pass
+        threading.Thread(target=_do, daemon=True).start()
 
     def _on_google_login(self):
         self._auth_msg.set("브라우저에서 구글 로그인을 진행해주세요...")
@@ -406,8 +454,9 @@ class StartupWindow:
             font=ctk.CTkFont(size=8), text_color="#4b5563", wraplength=190,
         ).pack(anchor="w", pady=(0, 2))
 
-        self._login_frame, self._logged_frame, self._logged_lbl = _build_auth_section(
-            inner, self._on_google_login, self._on_logout,
+        (self._login_frame, self._logged_frame, self._logged_lbl,
+         self._email_entry, self._pw_entry) = _build_auth_section(
+            inner, self._on_google_login, self._on_email_login, self._on_logout,
         )
         self._update_auth_ui()
 
@@ -476,7 +525,7 @@ class SettingsWindow:
     """트레이 "설정 화면 열기" 클릭 시 표시되는 창."""
 
     _FRAME_W = 520
-    _FRAME_H = 390
+    _FRAME_H = 440
     _PANEL_W = 224
     _POLL_MS = 33
 
@@ -549,6 +598,31 @@ class SettingsWindow:
         self._auth_msg.set(f"완료 — 기준값 {baseline:.3f}")
 
     # ── 인증 ──────────────────────────────────────────────────────────────────
+
+    def _on_email_login(self):
+        email = self._email_entry.get().strip()
+        pw    = self._pw_entry.get()
+        if not email or not pw:
+            self._auth_msg.set("이메일과 비밀번호를 입력해주세요.")
+            return
+        self._auth_msg.set("로그인 중...")
+        if self._root:
+            self._root.update()
+
+        def _do():
+            uid = self.auth_manager.login_with_email(email, pw)
+            if uid:
+                self.switch_logger(uid)
+                if self._root:
+                    self._root.after(0, lambda: self._auth_msg.set("로그인 완료"))
+                    self._root.after(0, self._update_auth_ui)
+                if self._on_auth_change:
+                    self._on_auth_change()
+            else:
+                err = self.auth_manager.last_error or "알 수 없는 오류"
+                if self._root:
+                    self._root.after(0, lambda: self._auth_msg.set(f"로그인 실패: {err}"))
+        threading.Thread(target=_do, daemon=True).start()
 
     def _on_google_login(self):
         self._auth_msg.set("브라우저에서 구글 로그인을 진행해주세요...")
@@ -704,8 +778,9 @@ class SettingsWindow:
             font=ctk.CTkFont(size=8), text_color="#4b5563", wraplength=190,
         ).pack(anchor="w", pady=(0, 2))
 
-        self._login_frame, self._logged_frame, self._logged_lbl = _build_auth_section(
-            inner, self._on_google_login, self._on_logout,
+        (self._login_frame, self._logged_frame, self._logged_lbl,
+         self._email_entry, self._pw_entry) = _build_auth_section(
+            inner, self._on_google_login, self._on_email_login, self._on_logout,
         )
         self._update_auth_ui()
 

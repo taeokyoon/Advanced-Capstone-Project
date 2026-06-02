@@ -31,3 +31,6 @@ google-auth-oauthlib
 
 # .exe 파일 생성
 pyinstaller
+
+# 뎁스추정모델
+depth-v2-anything

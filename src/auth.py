@@ -13,8 +13,9 @@ import requests
 
 log = logging.getLogger(__name__)
 
-_SIGN_IN_IDP_URL = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp"
-_REFRESH_URL     = "https://securetoken.googleapis.com/v1/token"
+_SIGN_IN_IDP_URL   = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp"
+_SIGN_IN_EMAIL_URL = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword"
+_REFRESH_URL       = "https://securetoken.googleapis.com/v1/token"
 class AuthManager:
     """
     이메일/비밀번호 로그인 + 로컬 세션 파일 기반 재시작 후 세션 복원.
@@ -142,6 +143,33 @@ class AuthManager:
             log.info("구글 로그인 성공: %s (%s)", self._email, self._uid)
             return self._uid
 
+        except requests.exceptions.HTTPError as e:
+            self.last_error = self._extract_firebase_error(e)
+            return None
+        except Exception as e:
+            self.last_error = str(e)
+            return None
+
+    def login_with_email(self, email: str, password: str) -> str | None:
+        if not self.api_key:
+            self.last_error = ".env 파일에 FIREBASE_API_KEY 가 설정되지 않았습니다."
+            return None
+        try:
+            resp = requests.post(
+                f"{_SIGN_IN_EMAIL_URL}?key={self.api_key}",
+                json={"email": email, "password": password, "returnSecureToken": True},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            body = resp.json()
+            self._uid              = body["localId"]
+            self._email            = body["email"]
+            self._id_token         = body.get("idToken")
+            self._refresh_token    = body.get("refreshToken")
+            self._token_expires_at = time.time() + int(body.get("expiresIn", 3600)) - 300
+            self.save_session()
+            log.info("이메일 로그인 성공: %s (%s)", self._email, self._uid)
+            return self._uid
         except requests.exceptions.HTTPError as e:
             self.last_error = self._extract_firebase_error(e)
             return None
